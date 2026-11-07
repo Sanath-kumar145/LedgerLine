@@ -36,10 +36,15 @@ graph TD
   - Validation enforced both client-side and server-side via `@Pattern` on registration DTOs.
 
 ### 2.2 Stateless Token Architecture (JWT)
-- **Token Format:** JSON Web Token (JWT) signed with HMAC-SHA256 (`HS256`) or asymmetric `RS256`.
+- **Token Format:** JSON Web Token (JWT) signed with HMAC-SHA256 (`HS256`).
+- **Cryptographic Key Material:**
+  - Mandates at least 32 bytes (256 bits) of entropy.
+  - No insecure SHA-256 fallback expansion for short keys: secrets with < 32 bytes fail fast at application startup with an `IllegalArgumentException`.
+  - Secure generation: `openssl rand -hex 32` or `openssl rand -base64 32`.
 - **Token Claims:**
   - `sub`: User ID or Username
-  - `roles`: Assigned authorities array (e.g. `["ROLE_USER"]`)
+  - `userId`: Numeric identifier of the user principal
+  - `roles`: Assigned authorities array (e.g. `["ROLE_ACCOUNT_HOLDER"]`)
   - `iat`: Issued-at timestamp
   - `exp`: Expiration timestamp (default: 24 hours)
   - `iss`: `ledgerline-api`

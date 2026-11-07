@@ -78,3 +78,98 @@
 6. Implement `CustomUserDetailsService`.
 7. Implement `AuthController` with `/api/v1/auth/register` and `/api/v1/auth/login`.
 8. Write integration tests using Testcontainers MySQL verifying authentication, password hashing, and role authorization.
+
+
+---
+
+## Entry 2: Day 2 Implementation & Verification
+
+- **Date:** 2026-11-07
+- **Development Day:** Day 2
+- **Focus Area:** User Persistence, Role-Based Access Control, Stateless JWT Security, Account Ownership Authorization & Testcontainers Integration Setup
+
+---
+
+### 1. Tasks Completed
+1. Created foundation Flyway migration `V1__init_auth_schema.sql` defining `roles`, `users`, `user_roles`, and `accounts` tables with balance constraints and seed data (`ROLE_ADMIN`, `ROLE_ACCOUNT_HOLDER`, `ROLE_AUDITOR`).
+2. Implemented domain entities (`User`, `Role`, `Account`), enums (`UserStatus`, `AccountType`, `AccountStatus`), and Spring Data repositories (`UserRepository`, `RoleRepository`, `AccountRepository`).
+3. Implemented DTOs (`RegisterRequest`, `LoginRequest`, `AuthResponse`, `UserProfileResponse`, `UserSummaryDto`, `AccountResponse`, `ErrorResponse`).
+4. Configured Spring Security 7.x / Spring Boot 4.1.2:
+   - Configured `BCryptPasswordEncoder` with cost factor 12.
+   - Built custom `UserPrincipal` and `CustomUserDetailsService`.
+   - Built `JwtTokenProvider` and `JwtAuthenticationFilter` with HMAC-SHA256 signature verification.
+   - Configured `SecurityConfig` with `ProviderManager(authProvider)` explicitly wrapping `DaoAuthenticationProvider` and `CustomUserDetailsService`.
+   - Enforced stateless sessions, CORS configuration, and RFC 7807 `ProblemDetail` handlers for 401 Unauthorized and 403 Forbidden.
+5. Implemented business services:
+   - `UserServiceImpl`: User registration with duplicate checks, password hashing, authentication, and user profile retrieval.
+   - `AccountServiceImpl`: Strict IDOR ownership validation (`account.userId == currentUser.getId()`), logging security alerts and denying unauthorized cross-user access.
+6. Implemented REST controllers:
+   - `AuthController`: `POST /api/v1/auth/register` (201 Created), `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`.
+   - `UserController`: `GET /api/v1/users/me`.
+   - `AdminController`: `GET /api/v1/admin/users` (secured with `hasRole('ADMIN')`).
+   - `AccountController`: `GET /api/v1/accounts`, `GET /api/v1/accounts/{id}`.
+7. Implemented global exception handling (`GlobalExceptionHandler`) emitting RFC 7807 ProblemDetail responses without leaking stack traces.
+8. Configured `JacksonConfig` with `JavaTimeModule` for Java 8 date/time serialization.
+9. Migrated test configuration:
+   - Completely removed Day 1 temporary DataSource exclusions from `src/test/resources/application.properties`.
+   - Configured official Testcontainers MySQL 8.0 datasource (`jdbc:tc:mysql:8.0.36:///ledgerline_test?TC_REUSABLE=true`).
+   - Preserved genuine MySQL testing; zero H2 substitution.
+   - Guarded container integration tests with `@Testcontainers(disabledWithoutDocker = true)`.
+10. Externalized all secrets and database credentials in production `application.properties` using environment variables without unsafe defaults.
+11. Executed and verified test suite: 36 tests run, 34 passed, 2 skipped (due to offline Docker engine daemon), 0 failed, 0 errors.
+
+---
+
+### 2. Files Created or Modified
+
+| File Path | Action | Description |
+| :--- | :--- | :--- |
+| `backend/ledgerline-api/pom.xml` | Modified | Added Jackson databind, JSR-310, JJWT (0.12.6), and Testcontainers BOM & MySQL dependencies. |
+| `backend/ledgerline-api/src/main/resources/application.properties` | Modified | Externalized DB credentials; removed useSSL=false and allowPublicKeyRetrieval=true; enforced TLS (sslMode=REQUIRED). |
+| `backend/ledgerline-api/src/main/resources/application-dev.properties` | Created | Separated local developer workstation configuration from production. |
+| `backend/ledgerline-api/src/test/resources/application.properties` | Modified | Removed Day 1 exclusions; configured Testcontainers MySQL 8.0 and test JWT secret. |
+| `backend/ledgerline-api/src/main/resources/db/migration/V1__init_auth_schema.sql` | Created | DDL for auth and accounts tables with seed roles. |
+| `backend/ledgerline-api/src/main/java/com/ledgerline/entity/*` | Created | `Role`, `User`, `UserStatus`, `Account`, `AccountType`, `AccountStatus`. |
+| `backend/ledgerline-api/src/main/java/com/ledgerline/repository/*` | Created | `RoleRepository`, `UserRepository`, `AccountRepository`. |
+| `backend/ledgerline-api/src/main/java/com/ledgerline/dto/*` | Created | Clean request/response DTOs preventing password leakage. |
+| `backend/ledgerline-api/src/main/java/com/ledgerline/exception/*` | Created | `DuplicateResourceException`, `ResourceNotFoundException`, `GlobalExceptionHandler`. |
+| `backend/ledgerline-api/src/main/java/com/ledgerline/security/*` | Created | `UserPrincipal`, `CustomUserDetailsService`, `JwtTokenProvider`, `JwtAuthenticationFilter`. |
+| `backend/ledgerline-api/src/main/java/com/ledgerline/config/*` | Created | `SecurityConfig`, `JacksonConfig`. |
+| `backend/ledgerline-api/src/main/java/com/ledgerline/service/*` | Created | `UserService`, `UserServiceImpl`, `AccountService`, `AccountServiceImpl`. |
+| `backend/ledgerline-api/src/main/java/com/ledgerline/controller/*` | Created | `AuthController`, `UserController`, `AdminController`, `AccountController`. |
+| `backend/ledgerline-api/src/test/java/com/ledgerline/security/PasswordSecurityTest.java` | Created | Unit test for BCrypt cost factor 12. |
+| `backend/ledgerline-api/src/test/java/com/ledgerline/security/jwt/JwtTokenProviderTest.java` | Created | Unit test for JWT generation, claims, expiration, tampering. |
+| `backend/ledgerline-api/src/test/java/com/ledgerline/service/AccountOwnershipServiceTest.java` | Created | Mockito unit test for IDOR cross-account authorization. |
+| `backend/ledgerline-api/src/test/java/com/ledgerline/controller/AuthControllerTest.java` | Created | Web slice test for register, login, conflict, logout. |
+| `backend/ledgerline-api/src/test/java/com/ledgerline/controller/AccountOwnershipTest.java` | Created | Web slice test for account ownership HTTP endpoints. |
+| `backend/ledgerline-api/src/test/java/com/ledgerline/security/RoleAuthorizationTest.java` | Created | Web slice test for RBAC role enforcement on protected paths. |
+| `backend/ledgerline-api/src/test/java/com/ledgerline/security/AuthenticationManagerConfigTest.java` | Created | Architecture test verifying `ProviderManager`, `DaoAuthenticationProvider`, and `BCrypt`. |
+| `backend/ledgerline-api/src/test/java/com/ledgerline/LedgerlineApiApplicationTests.java` | Modified | Updated with `@Testcontainers(disabledWithoutDocker = true)`. |
+| `backend/ledgerline-api/src/test/java/com/ledgerline/repository/MySqlAuthIntegrationTest.java` | Created | Testcontainers MySQL integration test for repositories and Flyway. |
+
+---
+
+### 3. Test & Verification Results
+
+1. **Backend Compile:** `BUILD SUCCESS` (34 main source files, 9 test source files).
+2. **Backend Test Suite:** `BUILD SUCCESS` (39 tests run: **37 passed**, **2 skipped**, **0 failed**, **0 errors**).
+   - `PasswordSecurityTest`: 3 passed
+   - `JwtTokenProviderTest`: 7 passed (including missing secret, short secret, and valid secret tests)
+   - `AccountOwnershipServiceTest`: 7 passed
+   - `AuthControllerTest`: 6 passed
+   - `AccountOwnershipTest`: 5 passed
+   - `RoleAuthorizationTest`: 5 passed
+   - `AuthenticationManagerConfigTest`: 4 passed
+   - `LedgerlineApiApplicationTests`: 1 skipped (Docker engine daemon offline)
+   - `MySqlAuthIntegrationTest`: 1 skipped (Docker engine daemon offline)
+3. **Frontend Build:** `SUCCESS` (Vite bundle built cleanly in 666ms).
+4. **Git State:** 0 files staged, 0 files committed.
+
+---
+
+### 4. Next Day's Objectives (Day 3)
+1. Implement Flyway migration `V2__init_ledger_schema.sql` for `ledger_transactions`, `ledger_entries`, `idempotency_records`, and `audit_events`.
+2. Implement double-entry clearing accounts (`SYSTEM_CLEARING`) with `CHECK` constraint exemptions.
+3. Implement `TransferService.deposit()` and `TransferService.withdraw()` with balanced double-entry ledger entries.
+4. Enforce balance validation and overdraft protection (`CHECK (balance >= 0.00)`).
+5. Build automated unit tests for deposit and withdrawal ledger balance math.

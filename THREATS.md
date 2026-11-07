@@ -33,7 +33,7 @@ This register enumerates security threats, financial risks, and failure modes ev
 - **Impact:** Critical. Catastrophic credential breach across all system actors.
 - **Mitigation:** Use Spring Security `BCryptPasswordEncoder` with minimum work factor of 12 (or Argon2); enforce password complexity policy (min 8 chars, mixed case, numbers, special characters) via Jakarta validation.
 - **Planned Verification Test:** Unit test verifying BCrypt prefix `$2a$12$` and rejection of sub-standard passwords during registration.
-- **Status:** **PLANNED** (Scheduled for Day 2)
+- **Status:** **VERIFIED** (Verified via `PasswordSecurityTest` and `AuthenticationManagerConfigTest` — BCrypt cost factor 12 enforced and tested).
 
 ---
 
@@ -42,7 +42,7 @@ This register enumerates security threats, financial risks, and failure modes ev
 - **Impact:** High. Unauthorized system configuration changes, unauthorized access to all user ledgers.
 - **Mitigation:** Method-level security with `@PreAuthorize("hasRole('ADMIN')")` and `@PreAuthorize("hasRole('AUDITOR')")`; strict antMatcher rules in `SecurityFilterChain`.
 - **Planned Verification Test:** Integration tests using `@WithMockUser(roles = "USER")` calling `/api/v1/admin/users`; assert HTTP 403 Forbidden.
-- **Status:** **PLANNED** (Scheduled for Day 2)
+- **Status:** **VERIFIED** (Verified via `RoleAuthorizationTest` — `ROLE_ADMIN` allowed access, `ROLE_ACCOUNT_HOLDER` and `ROLE_AUDITOR` rejected with HTTP 403 Forbidden).
 
 ---
 
@@ -51,7 +51,7 @@ This register enumerates security threats, financial risks, and failure modes ev
 - **Impact:** High. PII exposure, violation of banking privacy regulations.
 - **Mitigation:** Service layer validates account ownership against authenticated SecurityContext principal (`account.getUserId().equals(currentUser.getId())`); only `ROLE_ADMIN` or `ROLE_AUDITOR` may bypass for operational reasons.
 - **Planned Verification Test:** Integration test invoking `GET /api/v1/accounts/{otherUserIdAccount}`; assert HTTP 403 Forbidden.
-- **Status:** **PLANNED** (Scheduled for Day 3)
+- **Status:** **VERIFIED** (Verified via `AccountOwnershipTest` and `AccountOwnershipServiceTest` — cross-user access attempts rejected with HTTP 403 Forbidden and security alert logged).
 
 ---
 
@@ -123,7 +123,7 @@ This register enumerates security threats, financial risks, and failure modes ev
 - **Impact:** Medium to High. Information disclosure enabling secondary attacks.
 - **Mitigation:** Custom log formatting masking passwords and tokens; `@RestControllerAdvice` emitting standardized `ProblemDetail` responses without raw stack traces.
 - **Planned Verification Test:** Trigger intentional exception (e.g. entity not found); assert response contains structured error envelope without stack trace.
-- **Status:** **PLANNED** (Scheduled for Day 2)
+- **Status:** **VERIFIED** (Verified via `GlobalExceptionHandler` and controller tests — RFC 7807 responses returned with zero stack trace leaks; DTOs omit password hashes).
 
 ---
 
@@ -132,7 +132,7 @@ This register enumerates security threats, financial risks, and failure modes ev
 - **Impact:** Critical. Full application takeover.
 - **Mitigation:** Exclusion via `.gitignore` (`.env`, `credentials/`, `secrets/`); externalized configuration via OS environment variables.
 - **Planned Verification Test:** Repository-wide automated secret scan verifying absence of hardcoded passwords or JWT signing keys in git history.
-- **Status:** **VERIFIED** (Root `.gitignore` established on Day 1; application.properties contains zero secrets).
+- **Status:** **VERIFIED** (Root `.gitignore` established on Day 1; production `application.properties` externalizes credentials and enforces TLS encryption with `sslMode=REQUIRED`; `JwtTokenProvider` strictly mandates at least 32 bytes of entropy for `JWT_SECRET` with zero fallback).
 
 ---
 

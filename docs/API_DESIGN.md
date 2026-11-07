@@ -10,13 +10,13 @@
 
 | Endpoint Category | Base Path | Implementation Status | Planned Target Day |
 | :--- | :--- | :--- | :--- |
-| **Authentication** | `/api/v1/auth` | **PLANNED** | Day 2 |
-| **Users** | `/api/v1/users` | **PLANNED** | Day 2 |
-| **Accounts** | `/api/v1/accounts` | **PLANNED** | Day 3 |
+| **Authentication** | `/api/v1/auth` | **IMPLEMENTED & VERIFIED** | Day 2 |
+| **Users** | `/api/v1/users` | **IMPLEMENTED & VERIFIED** | Day 2 |
+| **Accounts** | `/api/v1/accounts` | **IMPLEMENTED & VERIFIED** (List & Get with IDOR Protection) | Day 2 / Day 3 |
+| **Admin Operations** | `/api/v1/admin/users` | **IMPLEMENTED & VERIFIED** (User Directory) | Day 2 / Day 5 |
 | **Deposits & Withdrawals** | `/api/v1/accounts/{id}/deposits`, `/withdrawals` | **PLANNED** | Day 3 |
 | **Transfers** | `/api/v1/transfers` | **PLANNED** | Day 4 |
 | **Statements & Ledger** | `/api/v1/accounts/{id}/statement` | **PLANNED** | Day 5 |
-| **Admin Operations** | `/api/v1/admin` | **PLANNED** | Day 5 |
 | **Auditor Operations** | `/api/v1/auditor` | **PLANNED** | Day 5 |
 
 *Note: As of Day 1, zero business endpoints are implemented. Only the Spring Boot framework baseline is active.*

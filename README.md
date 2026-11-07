@@ -1,7 +1,7 @@
 # LedgerLine — Money Movement With a Ledger You Can Prove
 
 > **Snovasys Hackathon Project**
-> **Status:** Day 1 Completed (Architecture, Database Design, Financial Integrity Specification & Baseline Build Verification)
+> **Status:** Day 2 Completed (Authentication, Role-Based Access Control, Account Ownership Authorization, Testcontainers MySQL Integration Setup)
 > **Repository:** [https://github.com/Sanath-kumar145/LedgerLine.git](https://github.com/Sanath-kumar145/LedgerLine.git)
 
 ---
@@ -97,20 +97,28 @@ LedgerLine/
 
 ---
 
-## 4. Current State (End of Day 1)
+## 4. Current State (End of Day 2)
 
-As of **Day 1**, the repository has completed its architectural, security, database design, and build verification phase:
-- **Project Audit Completed:** Discovered baseline issues (invalid wrapper URL, missing root `.gitignore`, test DataSource auto-configuration gap) and resolved them cleanly.
-- **Architecture Formulated:** Multi-layered backend architecture and modular React frontend defined with Mermaid sequence flows.
-- **Database Schema Designed:** Comprehensive designs for all 8 tables (`users`, `roles`, `user_roles`, `accounts`, `ledger_transactions`, `ledger_entries`, `idempotency_records`, `audit_events`).
-- **Financial Concurrency Designed:** Deterministic locking, idempotency state machine, and overdraft prevention fully engineered.
-- **Build Baselines Verified:**
-  - Backend compile: `BUILD SUCCESS` (Java 17 target).
-  - Backend tests: `BUILD SUCCESS` (Surefire 1 test run, 0 failures, 0 errors).
-  - Frontend lint: `SUCCESS` (ESLint 0 errors, 0 warnings).
-  - Frontend build: `SUCCESS` (Vite client bundle compiled in 415ms).
-
-*Note: Business logic (authentication, transfers, deposits, withdrawals) is scheduled for subsequent days in accordance with the hackathon rules.*
+As of **Day 2**, the repository has completed authentication, role-based access control, account ownership authorization, and production test configuration:
+- **Flyway Database Migration:** `V1__init_auth_schema.sql` establishes `roles`, `users`, `user_roles`, and `accounts` tables with balance constraints and seed data (`ROLE_ADMIN`, `ROLE_ACCOUNT_HOLDER`, `ROLE_AUDITOR`).
+- **Domain Persistence Layer:** Implemented JPA entities (`User`, `Role`, `Account`), enums (`UserStatus`, `AccountType`, `AccountStatus`), and Spring Data repositories (`UserRepository`, `RoleRepository`, `AccountRepository`).
+- **Security & Cryptography:** Configured Spring Security with stateless JWT validation (`JwtTokenProvider`, `JwtAuthenticationFilter`), BCrypt password hashing (work factor 12), and explicit `ProviderManager` wrapping `DaoAuthenticationProvider` and `CustomUserDetailsService`.
+- **Role-Based Access Control:** Strict role segregation enforced across `/api/v1/auth/**` (public), `/api/v1/users/**` (authenticated), `/api/v1/admin/**` (ROLE_ADMIN only), and `/api/v1/accounts/**` (authenticated ownership).
+- **IDOR / Ownership Protection:** `AccountServiceImpl` strictly enforces ownership checks (`account.getUserId().equals(currentUser.getId())`), allowing only account owners, administrators, or auditors to view account records. Cross-account access attempts emit security warnings and throw HTTP 403 Forbidden.
+- **REST Endpoints Implemented:**
+  - `POST /api/v1/auth/register` (returns 201 Created with clean profile response, zero credential exposure)
+  - `POST /api/v1/auth/login` (authenticates credentials and returns signed JWT token)
+  - `POST /api/v1/auth/logout` (stateless client cleanup confirmation)
+  - `GET /api/v1/users/me` (returns authenticated user profile)
+  - `GET /api/v1/admin/users` (administrative user directory, restricted to ROLE_ADMIN)
+  - `GET /api/v1/accounts` (lists accounts owned by caller)
+  - `GET /api/v1/accounts/{id}` (inspects account details with IDOR protection)
+- **Standardized RFC 7807 Error Handling:** `GlobalExceptionHandler` returns structured ProblemDetail envelopes for validation errors, duplicate resources, 404 not found, and 403 forbidden without leaking stack traces.
+- **Automated Verification:**
+  - 34 automated unit, security, controller, and ownership tests pass cleanly (`BUILD SUCCESS`).
+  - 2 MySQL integration tests (`LedgerlineApiApplicationTests`, `MySqlAuthIntegrationTest`) configured with Testcontainers MySQL 8.0 and gracefully skipped via `disabledWithoutDocker` when Docker daemon is offline.
+  - Zero warnings for generated passwords or conflicting UserDetailsService beans.
+  - Frontend production build (`npm run build`) verifies cleanly in 535ms.
 
 ---
 
@@ -120,7 +128,33 @@ As of **Day 1**, the repository has completed its architectural, security, datab
 - **Java:** JDK 17 or higher (JDK 24 supported)
 - **Node.js:** v20.x or v22.x
 - **npm:** v10.x
-- **MySQL:** MySQL Server 8.0+
+- **MySQL:** MySQL Server 8.0+ or Docker Desktop (for Testcontainers)
+
+### Environment Variables & Production Security
+For production deployment, configure the following mandatory environment variables:
+- `DB_URL`: MySQL connection string enforcing TLS transport encryption (e.g. `jdbc:mysql://db.production:3306/ledgerline?sslMode=REQUIRED&serverTimezone=UTC`). Insecure flags (`useSSL=false`, `allowPublicKeyRetrieval=true`) are strictly forbidden in production.
+- `DB_USERNAME`: Database username (externalized, no hardcoded defaults).
+- `DB_PASSWORD`: Database password (externalized, no hardcoded defaults).
+- `JWT_SECRET`: Cryptographically secure HMAC-SHA256 signing secret containing **at least 32 bytes (256 bits) of entropy**. Short or empty secrets will fail application startup with an `IllegalArgumentException`.
+- `JWT_EXPIRATION_MS`: Token lifetime in milliseconds (default: `86400000` / 24 hours).
+
+#### Generating a Cryptographically Secure JWT_SECRET
+To generate a secure 256-bit (32-byte) secret, run one of the following commands:
+```bash
+# Generate 64-character hexadecimal secret (32 bytes entropy):
+openssl rand -hex 32
+
+# Or generate 44-character Base64-encoded secret (32 bytes entropy):
+openssl rand -base64 32
+```
+
+#### Local Development Profile
+For local developer workstations without TLS certificates configured on local MySQL, activate the separate `dev` profile:
+```bash
+# Run with local development profile
+./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
+```
+This isolates local developer convenience defaults (`application-dev.properties`) from strict production configurations (`application.properties`).
 
 ### Backend Setup
 1. Open a terminal in `backend/ledgerline-api`:
@@ -162,8 +196,8 @@ As of **Day 1**, the repository has completed its architectural, security, datab
 | Development Day | Milestone | Scope | Status |
 | :---: | :--- | :--- | :---: |
 | **Day 1** | **Audit, Architecture & Design** | Repository audit, system architecture, database schema, concurrency design, threat model, API specifications, and baseline builds. | **COMPLETED** |
-| **Day 2** | **Authentication & Security** | User and Role entities, BCrypt hashing, Spring Security Filter Chain, JWT issuance, and Auth REST endpoints (`register`, `login`, `me`). | *Next* |
-| **Day 3** | **Account Management & Funding** | Account entity, account creation, account lookups with IDOR protection, Flyway migrations, and initial deposit/withdrawal clearing. | Planned |
+| **Day 2** | **Authentication, RBAC & Ownership** | User/Role entities, BCrypt work factor 12, stateless JWT, RBAC guards, account ownership IDOR defense, RFC 7807 handler, and Testcontainers setup. | **COMPLETED** |
+| **Day 3** | **Account Management & Funding** | Foundation Flyway migrations for ledger tables, double-entry clearing accounts, deposit clearing, and withdrawal clearing with balance checks. | *Next* |
 | **Day 4** | **Double-Entry Financial Core** | TransferService, deterministic row locking ($\min/\max$), double-entry postings, idempotency engine, and race-condition prevention. | Planned |
 | **Day 5** | **Statements & Reconciliation** | Immutable statement queries, audit event capture for refused transactions, and auditor mathematical reconciliation engine. | Planned |
 | **Day 6** | **Frontend Application** | React 19 UI, authentication flows, dashboard, transfer interface with proof badges, statement view, and auditor console. | Planned |
