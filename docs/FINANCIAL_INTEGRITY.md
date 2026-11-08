@@ -45,8 +45,16 @@ flowchart TD
 
 ### 2.3 Balance Validation After Locking (Fresh Read Principle)
 - A critical flaw in naive systems is checking the account balance before acquiring the lock or relying on a cached entity in memory.
-- Under LedgerLine's protocol, balance validation occurs **exclusively after** the pessimistic write lock has been granted on the account row.
-- The balance verified is the authoritative, freshly read snapshot directly from InnoDB row memory.
+- Under LedgerLine's protocol, balance validation occurs **exclusively after** the pessimistic write lock has been granted on the account row (`SELECT ... FOR UPDATE` via `accountRepository.findByIdWithLock(accountId)`).
+- **Hibernate Session Cache Isolation:** The entity must not be loaded via an unlocked `findById()` prior to locking, as Hibernate's First-Level Session Cache would cache stale pre-lock balance fields. By acquiring `findByIdWithLock(accountId)` as the initial query in the transaction, Hibernate hydrates the entity directly from the newly locked, authoritatively committed database row.
+- In `ConcurrentWithdrawalTest`, two concurrent ₹400 withdrawals against a ₹500 balance run simultaneously. Thread 1 acquires the lock, checks balance, and deducts ₹400 (balance becomes ₹100). Thread 2 waits on the row lock; upon acquiring it, it reads the fresh balance (₹100), detects insufficient funds for ₹400, logs an audit event, and throws `InsufficientFundsException` (HTTP 422). Overdrafts are mathematically and physically impossible.
+
+### 2.4 Autonomous Audit Logging (REQUIRES_NEW)
+- When a financial transaction fails (e.g., insufficient funds during an attempted withdrawal), the primary financial transaction must roll back cleanly to ensure zero balance modification and zero partial ledger entries.
+- However, financial regulations mandate that refused transactions and security violations must be permanently logged in `audit_events`.
+- LedgerLine implements `AuditService.recordEvent()` with `@Transactional(propagation = Propagation.REQUIRES_NEW)`.
+- When invoked, the audit event is committed in an autonomous database transaction decoupled from the operational transaction. Even when the outer financial transaction rolls back, the audit record remains permanently persisted on disk.
+- To prevent self-deadlocks between the primary transaction and the autonomous audit transaction, `audit_events` is decoupled from foreign key constraints on mutable business tables.
 
 ### 2.4 Idempotency Keys & Request Fingerprints
 - **Idempotency-Key Header:** Every non-idempotent HTTP request (`POST /api/v1/transfers`, `POST /api/v1/accounts/{id}/withdrawals`, etc.) must include an `Idempotency-Key` header with a client-generated UUIDv4.

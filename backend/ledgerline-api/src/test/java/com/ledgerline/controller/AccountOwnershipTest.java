@@ -8,6 +8,8 @@ import com.ledgerline.security.CustomUserDetailsService;
 import com.ledgerline.security.UserPrincipal;
 import com.ledgerline.security.jwt.JwtTokenProvider;
 import com.ledgerline.service.AccountService;
+import com.ledgerline.service.ReconciliationService;
+import com.ledgerline.service.TransactionService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +44,12 @@ class AccountOwnershipTest {
 
     @MockitoBean
     private AccountService accountService;
+
+    @MockitoBean
+    private TransactionService transactionService;
+
+    @MockitoBean
+    private ReconciliationService reconciliationService;
 
     @MockitoBean
     private CustomUserDetailsService userDetailsService;

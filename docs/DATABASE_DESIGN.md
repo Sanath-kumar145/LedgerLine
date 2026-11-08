@@ -1,6 +1,6 @@
 # LedgerLine — Relational Database Design Specification
-**Date:** 2026-11-06
-**Status:** Approved Design Baseline (Day 1 Technical Review)
+**Date:** 2026-11-08
+**Status:** Implemented & Verified Baseline (Day 3)
 **Target Engine:** MySQL 8.0 (InnoDB Storage Engine)
 
 ---
@@ -267,19 +267,23 @@ Stores client idempotency keys, SHA-256 request fingerprints, execution status, 
 ---
 
 ### 3.8 Table: `audit_events`
-Immutable record of security events, administrative actions, and refused/rejected transactions.
+Immutable record of security events, administrative actions, and refused/rejected transactions. To prevent operational lock contention or cascade failures during error rollbacks, this table functions as an autonomous append-only audit sink decoupled from foreign key constraints.
 
 | Column | Data Type | Modifiers | Description |
 | :--- | :--- | :--- | :--- |
 | `id` | `BIGINT` | `AUTO_INCREMENT`, `PRIMARY KEY` | Synthetic event ID. |
-| `user_id` | `BIGINT` | `NULL`, `FK -> users(id)` | Acting user, or NULL if unauthenticated. |
-| `event_type` | `VARCHAR(50)` | `NOT NULL` | e.g., `TRANSFER_REFUSED_INSUFFICIENT_FUNDS`. |
-| `resource_type` | `VARCHAR(50)` | `NOT NULL` | `ACCOUNT`, `TRANSACTION`, `AUTH`. |
-| `resource_id` | `VARCHAR(64)` | `NULL` | ID of the affected resource. |
+| `event_type` | `VARCHAR(50)` | `NOT NULL` | e.g., `WITHDRAWAL_REFUSED_INSUFFICIENT_FUNDS`, `DEPOSIT_COMPLETED`, `RECONCILIATION_DISCREPANCY`. |
+| `user_id` | `BIGINT` | `NULL` | Acting user ID, or NULL if unauthenticated. |
+| `account_id` | `BIGINT` | `NULL` | ID of the affected account. |
+| `details` | `VARCHAR(1000)` | `NULL` | Diagnostic narrative of the event. |
 | `ip_address` | `VARCHAR(45)` | `NULL` | IPv4 or IPv6 client origin. |
-| `status` | `VARCHAR(20)` | `NOT NULL` | `SUCCESS`, `FAILED`, `REFUSED`. |
-| `details` | `TEXT` | `NULL` | JSON or diagnostic description of event. |
 | `created_at` | `DATETIME(6)` | `NOT NULL`, `DEFAULT CURRENT_TIMESTAMP(6)` | Event generation timestamp. |
+
+- **Indexes:**
+  - `idx_audit_event_type` (`event_type`)
+  - `idx_audit_user_id` (`user_id`)
+  - `idx_audit_account_id` (`account_id`)
+  - `idx_audit_created` (`created_at`)
 
 ---
 

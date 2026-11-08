@@ -1,6 +1,6 @@
 # LedgerLine — RESTful API Specification
-**Date:** 2026-11-06
-**Status:** Approved Design Baseline (Day 1)
+**Date:** 2026-11-08
+**Status:** Approved Implementation Baseline (Day 3 Complete)
 **Base URL:** `/api/v1`
 **Protocol:** HTTPS / JSON
 
@@ -14,12 +14,13 @@
 | **Users** | `/api/v1/users` | **IMPLEMENTED & VERIFIED** | Day 2 |
 | **Accounts** | `/api/v1/accounts` | **IMPLEMENTED & VERIFIED** (List & Get with IDOR Protection) | Day 2 / Day 3 |
 | **Admin Operations** | `/api/v1/admin/users` | **IMPLEMENTED & VERIFIED** (User Directory) | Day 2 / Day 5 |
-| **Deposits & Withdrawals** | `/api/v1/accounts/{id}/deposits`, `/withdrawals` | **PLANNED** | Day 3 |
+| **Deposits & Withdrawals** | `/api/v1/accounts/{id}/deposits`, `/withdrawals` | **IMPLEMENTED & VERIFIED** (Pessimistic Locking & Double Entry) | Day 3 |
+| **Account Statements** | `/api/v1/accounts/{id}/statement` | **IMPLEMENTED & VERIFIED** (Chronological Ledger Entries) | Day 3 |
+| **Account Reconciliation** | `/api/v1/accounts/{id}/reconciliation` | **IMPLEMENTED & VERIFIED** (Account Holder Integrity Check) | Day 3 |
+| **Auditor Operations** | `/api/v1/auditor` | **IMPLEMENTED & VERIFIED** (Account & System Conservation) | Day 3 |
 | **Transfers** | `/api/v1/transfers` | **PLANNED** | Day 4 |
-| **Statements & Ledger** | `/api/v1/accounts/{id}/statement` | **PLANNED** | Day 5 |
-| **Auditor Operations** | `/api/v1/auditor` | **PLANNED** | Day 5 |
 
-*Note: As of Day 1, zero business endpoints are implemented. Only the Spring Boot framework baseline is active.*
+*Note: As of Day 3, core double-entry deposits, withdrawals, statements, and mathematical reconciliation engines are fully implemented and verified.*
 
 ---
 
@@ -408,7 +409,7 @@ All non-2xx responses conform to the standard RFC 7807 Problem Detail envelope:
     "systemTotalDebits": "481900.00",
     "systemTotalCredits": "481900.00",
     "systemDelta": "0.00",
-    "integrityStatus": "PASS_PERFECT_CONSERVATION",
-    "evaluatedAt": "2026-11-06T15:52:00.000Z"
+    "integrityStatus": "SYSTEM_BALANCED",
+    "evaluatedAt": "2026-11-08T15:52:00.000Z"
   }
   ```

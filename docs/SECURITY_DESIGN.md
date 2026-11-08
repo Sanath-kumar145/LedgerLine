@@ -1,6 +1,6 @@
 # LedgerLine — Security Architecture & Design Specification
-**Date:** 2026-11-06
-**Status:** Approved Design Baseline (Day 1)
+**Date:** 2026-11-08
+**Status:** Implementation Baseline (Day 3 Complete)
 **System:** LedgerLine — Money Movement With a Ledger You Can Prove
 
 ---
@@ -115,9 +115,26 @@ graph TD
   - `created_at`
   - Diagnostic metadata snapshot.
 
+### 6.1 Autonomous Transaction Propagation (`REQUIRES_NEW`)
+- Audit events for refused operations (e.g., `INSUFFICIENT_FUNDS`) must persist even when the outer financial transaction fails or throws an exception resulting in rollback.
+- `AuditServiceImpl.recordEvent(...)` executes with `@Transactional(propagation = Propagation.REQUIRES_NEW)`.
+- **Database Lock Decoupling:** In MySQL InnoDB, foreign key constraints enforce shared (`S`) locks on referenced parent rows (`accounts`). If an outer transaction holds an exclusive row lock (`X` lock via `SELECT ... FOR UPDATE`) on an account, an autonomous inner transaction attempting to insert an `audit_event` with a foreign key back to `accounts` would block waiting for the outer lock to release, causing lock wait timeouts or self-deadlocks. Consequently, `audit_events` references entity IDs (`account_id`, `user_id`) as indexed numeric fields without relational FK constraints.
+
 ---
 
-## 7. Secret Management & Version Control Hygiene
+## 7. Concurrency Control & Race Condition Immunity
+
+### 7.1 Pessimistic Row Locking (`SELECT ... FOR UPDATE`)
+- To prevent double-spending and race condition overdrafts, all mutating balance operations lock the customer account row immediately upon entering the transaction.
+- `AccountRepository.findByIdWithLock(accountId)` issues `SELECT ... FOR UPDATE` under `Isolation.READ_COMMITTED`.
+
+### 7.2 Fresh Read Principle & Session Cache Isolation
+- Hibernate maintains an L1 (session) entity cache. If an entity is read using an unlocked query prior to locking, Hibernate caches that entity. Subsequent calls to lock the entity may return the cached representation without querying MySQL again.
+- **Enforcement:** `TransactionServiceImpl` mandates that `findByIdWithLock(accountId)` is the **first query executed** within the `@Transactional` boundary, ensuring the latest committed row state and balance are loaded directly from the database under lock.
+
+---
+
+## 8. Secret Management & Version Control Hygiene
 
 - **Rule 10 Compliance:** No plaintext secrets, tokens, or private credentials may ever be committed to source control.
 - In `backend/ledgerline-api/src/main/resources/application.properties`:

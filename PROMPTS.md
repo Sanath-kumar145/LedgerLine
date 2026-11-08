@@ -167,3 +167,43 @@ Requested an in-depth diagnostic report for backend test compilation errors:
 ## 6. Verification & Integrity Statement (Day 2)
 
 All investigations, compilation fixes, security enhancements, and test suite executions documented in this record represent genuine technical findings executed on the project environment. No test results or implementation statuses were fabricated.
+
+---
+
+## 7. Day 3: Double-Entry Ledger, Deposits, Withdrawals and Financial Integrity
+
+### 7.1 User Prompt (Summary)
+> **LEDGERLINE — DAY 3 IMPLEMENTATION: Double-Entry Ledger, Deposits, Withdrawals and Financial Integrity**
+> Continue existing LedgerLine project. Do not create a new project or replace the existing architecture.
+> 1. Initial audit of existing entities, repositories, migrations, security, and integration tests.
+> 2. Financial architecture: genuine double-entry ledger ($\sum \text{debits} == \sum \text{credits}$ per transaction), fixed-point currency math in INR with `DECIMAL(19, 2)` / `BigDecimal`, system clearing accounts (`SYS_CLEARING_INR`, `SYS_CLEARING_USD`).
+> 3. Flyway database migration `V2__init_ledger_schema.sql` (`ledger_transactions`, `ledger_entries`, `audit_events`, seed clearing accounts, indexes).
+> 4. Authenticated Deposit API (`POST /api/v1/accounts/{id}/deposits`) updating customer balance and posting balanced double entries.
+> 5. Authenticated Withdrawal API (`POST /api/v1/accounts/{id}/withdrawals`) with pessimistic row locking (`SELECT ... FOR UPDATE`), in-transaction fresh balance check, overdraft prevention (HTTP 422 `InsufficientFundsException`), and balanced double entries.
+> 6. Minimum Transaction History API (`GET /api/v1/accounts/{id}/statement`) with server-side ownership checks.
+> 7. Mathematical Reconciliation Engine (`ReconciliationService`, `AuditorController`) for per-account reconciliation ($\Delta = \text{materialized} - (\sum \text{credits} - \sum \text{debits}) == 0.00$) and system-wide conservation of money ($\sum \text{all debits} == \sum \text{all credits}$).
+> 8. Comprehensive automated test suite against real MySQL 8.0 via Testcontainers (no H2), including multi-threaded concurrent withdrawal race condition test with `CountDownLatch` where two ₹400 withdrawals against a ₹500 balance run simultaneously (exactly 1 succeeds, 1 fails with 422, final balance strictly ₹100.00).
+> 9. Truthful documentation updates across all project architecture docs. Do not stage, commit, or push.
+
+### 7.2 Implementation & Engineering Summary
+1. **Flyway Schema Migration (`V2__init_ledger_schema.sql`)**:
+   - Created `ledger_transactions` (master journal with initiator tracking), `ledger_entries` (immutable postings), and `audit_events` (autonomous security and transaction refusal log).
+   - Seeded system clearing accounts `SYS_CLEARING_INR` and `SYS_CLEARING_USD`.
+   - Optimized indexes for InnoDB locking and high-frequency lookups.
+2. **Pessimistic Locking & Fresh Read Principle**:
+   - Implemented `findByIdWithLock(accountId)` using `LockModeType.PESSIMISTIC_WRITE` on `AccountRepository`.
+   - Identified and resolved Hibernate L1 session cache pitfall: by ensuring `findByIdWithLock(accountId)` is the first query executed within the transaction, Hibernate hydrates the entity directly under an exclusive row lock (`SELECT ... FOR UPDATE`), preventing stale reads in concurrent threads.
+3. **Autonomous Audit Logging (`REQUIRES_NEW`) & Lock Decoupling**:
+   - Configured `AuditServiceImpl.recordEvent(...)` with `@Transactional(propagation = Propagation.REQUIRES_NEW)`.
+   - Removed foreign key constraints from `audit_events` to decouple audit persistence from row-level locks on `accounts`, eliminating lock wait timeouts and self-deadlocks during failed financial transactions.
+4. **Mathematical Reconciliation Engine**:
+   - `ReconciliationServiceImpl.reconcileAccount()` computes $\sum \text{credits} - \sum \text{debits}$ against materialized balance.
+   - `ReconciliationServiceImpl.reconcileSystem()` validates system-wide zero-sum conservation ($\sum \text{debits} == \sum \text{credits}$).
+5. **Endpoints & Security**:
+   - `AccountController`: `/api/v1/accounts/{id}/deposits`, `/withdrawals`, `/statement`, `/reconciliation`.
+   - `AuditorController`: `/api/v1/auditor/reconcile/{accountId}`, `/system-reconciliation` secured with `@PreAuthorize("hasAnyRole('AUDITOR', 'ADMIN')")`.
+6. **Automated Verification Against Real MySQL 8.0 Testcontainers**:
+   - 61 total tests executed: 61 passed, 0 failed, 0 errors, 0 skipped.
+   - `ConcurrentWithdrawalTest`: Successfully verified that two concurrent ₹400 withdrawals against an initial ₹500 balance result in exactly 1 success, 1 failure (HTTP 422), a strictly maintained ₹100.00 balance, exactly 2 customer ledger entries, an autonomous audit record, and verified mathematical reconciliation.
+   - Frontend production build (`npm run build --prefix frontend`): Succeeded cleanly with exit code 0.
+   - `git diff --check`: 0 whitespace errors; zero staged/committed files.

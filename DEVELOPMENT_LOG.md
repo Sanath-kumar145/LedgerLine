@@ -173,3 +173,84 @@
 3. Implement `TransferService.deposit()` and `TransferService.withdraw()` with balanced double-entry ledger entries.
 4. Enforce balance validation and overdraft protection (`CHECK (balance >= 0.00)`).
 5. Build automated unit tests for deposit and withdrawal ledger balance math.
+
+---
+
+## 2026-11-08 — Day 3: Double-Entry Ledger, Deposits, Withdrawals and Financial Integrity
+
+### 1. Scope & Objectives
+Implement genuine double-entry money movement, clearing counterparty accounts, deposits, withdrawals with pessimistic row locking and overdraft prevention, transaction history statements, autonomous audit logging, mathematical reconciliation engines, and multi-threaded race condition tests against real MySQL 8.0 in Testcontainers.
+
+---
+
+### 2. Implementation Deliverables
+
+1. **Flyway Migration `V2__init_ledger_schema.sql`**:
+   - `ledger_transactions`: Master transaction journal tracking reference, type, status, amount, currency, and initiating user.
+   - `ledger_entries`: Double-entry transaction postings tracking account, entry type (`DEBIT`/`CREDIT`), amount, and running balance after posting.
+   - `audit_events`: Autonomous audit log capturing security, authorization, and financial refusal events.
+   - Seeded system clearing accounts: `SYS_CLEARING_INR` and `SYS_CLEARING_USD`.
+   - Indexes added for performance: `idx_entries_account_id_created`, `idx_entries_tx_id`, `idx_tx_ref`, `idx_audit_account_created`.
+
+2. **Domain Model & Entities**:
+   - Entities: `LedgerTransaction`, `LedgerEntry`, `AuditEvent`.
+   - Enums: `TransactionType` (`DEPOSIT`, `WITHDRAWAL`, `TRANSFER`), `TransactionStatus` (`PENDING`, `COMPLETED`, `FAILED`), `EntryType` (`DEBIT`, `CREDIT`).
+   - Repositories: `AccountRepository` (with `@Lock(LockModeType.PESSIMISTIC_WRITE)` methods `findByIdWithLock`, `findByAccountNumberWithLock`, `findByAccountTypeAndCurrencyWithLock`), `LedgerTransactionRepository`, `LedgerEntryRepository`, `AuditEventRepository`.
+
+3. **Core Services & Financial Engine**:
+   - `TransactionService` / `TransactionServiceImpl`:
+     - Deposits: Debits `SYS_CLEARING_INR`, credits customer account; balances increase.
+     - Withdrawals: Pessimistic write lock acquired immediately upon transaction entry (`findByIdWithLock`), Fresh Read Principle enforced to bypass stale Hibernate L1 cache, available balance checked against withdrawal amount, refuses overdrafts with RFC 7807 422 `InsufficientFundsException`, debits customer account, credits `SYS_CLEARING_INR`.
+     - Invariant verification: Asserted $\sum \text{debits} == \sum \text{credits}$ on every posted transaction.
+   - `AuditService` / `AuditServiceImpl`:
+     - Autonomous transaction propagation via `@Transactional(propagation = Propagation.REQUIRES_NEW)`.
+     - Foreign key decoupling on `audit_events` to ensure refused operations persist even when outer financial transactions roll back without encountering InnoDB self-deadlocks.
+   - `ReconciliationService` / `ReconciliationServiceImpl`:
+     - Account reconciliation: Proves materialized balance equals $\sum \text{credits} - \sum \text{debits}$ ($\Delta = 0.00$).
+     - System-wide reconciliation: Proves total system debits equal total system credits ($\sum \text{all debits} == \sum \text{all credits}$, system delta $= 0.00$, integrity status `SYSTEM_BALANCED`).
+
+4. **REST Controllers**:
+   - `AccountController`:
+     - `POST /api/v1/accounts/{id}/deposits`
+     - `POST /api/v1/accounts/{id}/withdrawals`
+     - `GET /api/v1/accounts/{id}/statement`
+     - `GET /api/v1/accounts/{id}/reconciliation`
+   - `AuditorController`:
+     - `GET /api/v1/auditor/reconcile/{accountId}`
+     - `GET /api/v1/auditor/system-reconciliation`
+     - Protected via `@PreAuthorize("hasAnyRole('AUDITOR', 'ADMIN')")`.
+
+---
+
+### 3. Test & Verification Results
+
+1. **Automated Test Suite (Real MySQL 8.0 Testcontainers)**:
+   - **Total Tests Run:** 61
+   - **Passed:** 61
+   - **Failures:** 0
+   - **Errors:** 0
+   - **Skipped:** 0
+   - **Key Test Classes:**
+     - `DepositWithdrawalServiceTest`: 6 passed (deposit/withdrawal math, clearing counterparty balance, overdraft rejection, frozen account handling).
+     - `ReconciliationServiceTest`: 6 passed (account balance match, simulated corruption detection, system-wide conservation).
+     - `DepositWithdrawalControllerTest`: 7 passed (validation, 422 RFC 7807 responses, statement pagination, auditor access).
+     - `MySqlLedgerIntegrationTest`: 1 passed (Flyway V2 migration, live deposits, withdrawals, double-entry invariance, and reconciliation against MySQL Testcontainers).
+     - `ConcurrentWithdrawalTest`: 1 passed (race condition stress test: 2 concurrent ₹400 withdrawals against ₹500 balance; exactly 1 succeeds, 1 fails with 422, final balance strictly ₹100.00, customer entries count exactly 2, audit event persisted via `REQUIRES_NEW`, reconciliation balanced).
+     - Day 2 Test Regression: All 46 existing unit, slice, and integration tests passed cleanly (including `MySqlAuthIntegrationTest` and `LedgerlineApiApplicationTests`).
+
+2. **Frontend Production Build**:
+   - Command: `npm run build --prefix frontend`
+   - Status: `SUCCESS` (exit code 0, built in 606ms).
+
+3. **Code Quality & Git Hygiene**:
+   - `git diff --check`: 0 whitespace errors.
+   - Root `package.json` and `package-lock.json` untouched.
+   - 0 files staged, 0 commits pushed.
+
+---
+
+### 4. Next Day's Objectives (Day 4)
+1. Implement internal inter-account transfer API (`POST /api/v1/transfers`).
+2. Implement deterministic dual-account pessimistic locking order ($\min(\text{src}, \text{dst})$ then $\max(\text{src}, \text{dst})$) to eliminate transfer deadlocks.
+3. Implement `Idempotency-Key` interceptor/filter with SHA-256 payload fingerprinting and persistent `idempotency_records` table.
+4. Add concurrent transfer and deadlock stress testing.

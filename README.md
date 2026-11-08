@@ -1,7 +1,7 @@
 # LedgerLine — Money Movement With a Ledger You Can Prove
 
 > **Snovasys Hackathon Project**
-> **Status:** Day 2 Completed (Authentication, Role-Based Access Control, Account Ownership Authorization, Testcontainers MySQL Integration Setup)
+> **Status:** Day 3 Completed (Double-Entry Ledger Architecture, Deposits, Withdrawals, Pessimistic Row Locking, Concurrency Defense, Mathematical Reconciliation Engine, Real MySQL 8.0 Integration with Testcontainers)
 > **Repository:** [https://github.com/Sanath-kumar145/LedgerLine.git](https://github.com/Sanath-kumar145/LedgerLine.git)
 
 ---
@@ -97,28 +97,42 @@ LedgerLine/
 
 ---
 
-## 4. Current State (End of Day 2)
+## 4. Current State (End of Day 3)
 
-As of **Day 2**, the repository has completed authentication, role-based access control, account ownership authorization, and production test configuration:
-- **Flyway Database Migration:** `V1__init_auth_schema.sql` establishes `roles`, `users`, `user_roles`, and `accounts` tables with balance constraints and seed data (`ROLE_ADMIN`, `ROLE_ACCOUNT_HOLDER`, `ROLE_AUDITOR`).
-- **Domain Persistence Layer:** Implemented JPA entities (`User`, `Role`, `Account`), enums (`UserStatus`, `AccountType`, `AccountStatus`), and Spring Data repositories (`UserRepository`, `RoleRepository`, `AccountRepository`).
-- **Security & Cryptography:** Configured Spring Security with stateless JWT validation (`JwtTokenProvider`, `JwtAuthenticationFilter`), BCrypt password hashing (work factor 12), and explicit `ProviderManager` wrapping `DaoAuthenticationProvider` and `CustomUserDetailsService`.
-- **Role-Based Access Control:** Strict role segregation enforced across `/api/v1/auth/**` (public), `/api/v1/users/**` (authenticated), `/api/v1/admin/**` (ROLE_ADMIN only), and `/api/v1/accounts/**` (authenticated ownership).
-- **IDOR / Ownership Protection:** `AccountServiceImpl` strictly enforces ownership checks (`account.getUserId().equals(currentUser.getId())`), allowing only account owners, administrators, or auditors to view account records. Cross-account access attempts emit security warnings and throw HTTP 403 Forbidden.
+As of **Day 3**, the repository has implemented and verified the full financial core for double-entry bookkeeping, deposits, withdrawals, concurrency defense, and continuous reconciliation:
+- **Flyway Database Migrations:**
+  - `V1__init_auth_schema.sql`: Core tables for `roles`, `users`, `user_roles`, and `accounts` with `CHECK (account_type = 'SYSTEM_CLEARING' OR balance >= 0.00)`.
+  - `V2__init_ledger_schema.sql`: Double-entry core tables for `ledger_transactions`, `ledger_entries`, `audit_events`, auxiliary indexes, and seed clearing accounts (`SYS_CLEARING_INR`, `SYS_CLEARING_USD`).
+- **Domain Persistence Layer:**
+  - Enums: `TransactionType` (DEPOSIT, WITHDRAWAL, TRANSFER, ADJUSTMENT), `TransactionStatus` (PENDING, POSTED, FAILED, REJECTED), `EntryType` (DEBIT, CREDIT).
+  - Entities: `LedgerTransaction` (journal header with UUID reference, initiator user tracking), `LedgerEntry` (atomic immutable postings), `AuditEvent` (security & refused attempt logging).
+  - Repositories: `LedgerTransactionRepository`, `LedgerEntryRepository`, `AuditEventRepository`, `AccountRepository` with pessimistic write locks (`findByIdWithLock`, `findByAccountNumberWithLock`, `findByAccountTypeAndCurrencyWithLock`).
+- **Financial Architecture & Invariants:**
+  - **Double-Entry Principle:** Every transaction generates at least two balanced entries ($\sum \text{Debits} == \sum \text{Credits}$).
+  - **Clearing Invariant:** External deposits debit `SYS_CLEARING_INR` and credit the customer account; external withdrawals debit the customer account and credit `SYS_CLEARING_INR`. Net system money is strictly conserved.
+  - **Pessimistic Row Locking (`SELECT ... FOR UPDATE`):** The customer account row is locked exclusively at the start of the transaction. Fresh balance verification occurs under lock to prevent race conditions and double-spending.
+  - **Autonomous Audit Logging (`Propagation.REQUIRES_NEW`):** Refused operations (e.g. `WITHDRAWAL_REFUSED_INSUFFICIENT_FUNDS`) are logged in an autonomous transaction, persisting even when the financial transaction rolls back.
+- **Mathematical Reconciliation Engine:**
+  - `ReconciliationService`: Verifies account balance against sum of entries ($\Delta = \text{materialized} - (\sum \text{credits} - \sum \text{debits}) == 0.00$) and system-wide conservation ($\sum \text{all debits} == \sum \text{all credits}$, 0 unbalanced transactions).
 - **REST Endpoints Implemented:**
-  - `POST /api/v1/auth/register` (returns 201 Created with clean profile response, zero credential exposure)
-  - `POST /api/v1/auth/login` (authenticates credentials and returns signed JWT token)
-  - `POST /api/v1/auth/logout` (stateless client cleanup confirmation)
-  - `GET /api/v1/users/me` (returns authenticated user profile)
-  - `GET /api/v1/admin/users` (administrative user directory, restricted to ROLE_ADMIN)
-  - `GET /api/v1/accounts` (lists accounts owned by caller)
-  - `GET /api/v1/accounts/{id}` (inspects account details with IDOR protection)
-- **Standardized RFC 7807 Error Handling:** `GlobalExceptionHandler` returns structured ProblemDetail envelopes for validation errors, duplicate resources, 404 not found, and 403 forbidden without leaking stack traces.
+  - `POST /api/v1/auth/register` (user registration)
+  - `POST /api/v1/auth/login` (stateless JWT issue)
+  - `POST /api/v1/auth/logout` (stateless client confirmation)
+  - `GET /api/v1/users/me` (profile retrieval)
+  - `GET /api/v1/admin/users` (ROLE_ADMIN user directory)
+  - `GET /api/v1/accounts` (user accounts list)
+  - `GET /api/v1/accounts/{id}` (account details with IDOR check)
+  - `POST /api/v1/accounts/{id}/deposits` (authenticated deposit, double-entry clearing)
+  - `POST /api/v1/accounts/{id}/withdrawals` (authenticated withdrawal, pessimistic lock, overdraft check)
+  - `GET /api/v1/accounts/{id}/statement` (chronological statement of entries)
+  - `GET /api/v1/accounts/{id}/reconciliation` (account-level math proof)
+  - `GET /api/v1/auditor/reconcile/{accountId}` (ROLE_AUDITOR / ROLE_ADMIN account check)
+  - `GET /api/v1/auditor/system-reconciliation` (ROLE_AUDITOR / ROLE_ADMIN system proof)
 - **Automated Verification:**
-  - 34 automated unit, security, controller, and ownership tests pass cleanly (`BUILD SUCCESS`).
-  - 2 MySQL integration tests (`LedgerlineApiApplicationTests`, `MySqlAuthIntegrationTest`) configured with Testcontainers MySQL 8.0 and gracefully skipped via `disabledWithoutDocker` when Docker daemon is offline.
-  - Zero warnings for generated passwords or conflicting UserDetailsService beans.
-  - Frontend production build (`npm run build`) verifies cleanly in 535ms.
+  - **61 automated tests executed and passing cleanly (0 failures, 0 errors, 0 skipped).**
+  - **100% genuine MySQL 8.0 testing via Testcontainers** (Docker Engine 29.3.1 / Testcontainers 1.21.4).
+  - Multi-threaded concurrent withdrawal stress test (`ConcurrentWithdrawalTest`) successfully proved race condition immunity and overdraft prevention using `CountDownLatch`.
+  - Frontend production build (`npm run build`) verifies cleanly.
 
 ---
 
@@ -197,8 +211,8 @@ This isolates local developer convenience defaults (`application-dev.properties`
 | :---: | :--- | :--- | :---: |
 | **Day 1** | **Audit, Architecture & Design** | Repository audit, system architecture, database schema, concurrency design, threat model, API specifications, and baseline builds. | **COMPLETED** |
 | **Day 2** | **Authentication, RBAC & Ownership** | User/Role entities, BCrypt work factor 12, stateless JWT, RBAC guards, account ownership IDOR defense, RFC 7807 handler, and Testcontainers setup. | **COMPLETED** |
-| **Day 3** | **Account Management & Funding** | Foundation Flyway migrations for ledger tables, double-entry clearing accounts, deposit clearing, and withdrawal clearing with balance checks. | *Next* |
-| **Day 4** | **Double-Entry Financial Core** | TransferService, deterministic row locking ($\min/\max$), double-entry postings, idempotency engine, and race-condition prevention. | Planned |
+| **Day 3** | **Account Management & Funding** | Foundation Flyway migrations for ledger tables, double-entry clearing accounts, deposit clearing, and withdrawal clearing with balance checks. | **COMPLETED** |
+| **Day 4** | **Double-Entry Financial Core** | TransferService, deterministic row locking ($\min/\max$), double-entry postings, idempotency engine, and race-condition prevention. | *Next* |
 | **Day 5** | **Statements & Reconciliation** | Immutable statement queries, audit event capture for refused transactions, and auditor mathematical reconciliation engine. | Planned |
 | **Day 6** | **Frontend Application** | React 19 UI, authentication flows, dashboard, transfer interface with proof badges, statement view, and auditor console. | Planned |
 | **Day 7** | **Integration & Concurrency Testing** | Multi-threaded race condition tests (CountDownLatch), stress testing, edge-case hardening, and final delivery polish. | Planned |

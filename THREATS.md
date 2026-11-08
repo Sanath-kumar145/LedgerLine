@@ -1,6 +1,6 @@
 # LedgerLine — Threat Model & Security Register
-**Date:** 2026-11-06
-**Status:** Baseline Security Register (Day 1)
+**Date:** 2026-11-08
+**Status:** Implementation Security Register (Day 3 Complete)
 **System:** LedgerLine — Money Movement With a Ledger You Can Prove
 
 ---
@@ -65,11 +65,11 @@ This register enumerates security threats, financial risks, and failure modes ev
 ---
 
 ### THREAT-06: Concurrent Withdrawals & Race-Condition Overdrafts
-- **Threat Description:** Two simultaneous transfer/withdrawal requests for \$100 are executed on an account with a \$100 balance. In a race condition, both pass validation and produce a -\$100 overdraft.
+- **Threat Description:** Two simultaneous transfer/withdrawal requests for $100 are executed on an account with a $100 balance. In a race condition, both pass validation and produce a -$100 overdraft.
 - **Impact:** Critical. Illegal negative balances, financial insolvency.
-- **Mitigation:** Pessimistic write locking (`SELECT ... FOR UPDATE`); fresh balance re-validation under lock; database check constraint `CHECK (balance >= 0.00)`.
-- **Planned Verification Test:** Concurrency test using `ExecutorService` and `CountDownLatch` with 10 concurrent threads attempting to withdraw \$50 from an account with \$100; assert exactly 2 succeed and 8 fail with insufficient funds.
-- **Status:** **PLANNED** (Scheduled for Day 4)
+- **Mitigation:** Pessimistic write locking (`SELECT ... FOR UPDATE`); fresh balance re-validation under lock (Fresh Read Principle); database check constraint `CHECK (balance >= 0.00)`.
+- **Planned Verification Test:** Concurrency test using `ExecutorService` and `CountDownLatch` with concurrent threads attempting to withdraw funds exceeding balance; assert exactly one succeeds and the other fails with insufficient funds.
+- **Status:** **VERIFIED** (Verified via `ConcurrentWithdrawalTest` against MySQL Testcontainers — two concurrent ₹400 withdrawals against ₹500 balance executed simultaneously; exactly 1 succeeded, 1 failed with HTTP 422 `InsufficientFundsException`, final balance strictly ₹100.00, customer entries count exactly 2, audit event logged with `REQUIRES_NEW`, reconciliation status `BALANCED`).
 
 ---
 
@@ -94,18 +94,18 @@ This register enumerates security threats, financial risks, and failure modes ev
 ### THREAT-09: Negative Amounts & Decimal Scale Tampering
 - **Threat Description:** Client submits negative transfer amount (`-50.00`) to increase source balance or fractional amounts (`0.00001`) causing rounding errors.
 - **Impact:** Critical. Synthetic money generation or balance corruption.
-- **Mitigation:** Jakarta validation `@DecimalMin(value = "0.01")` and `@Digits(integer = 15, fraction = 2)`; DB check constraints `CHECK (amount > 0.00)`.
+- **Mitigation:** Jakarta validation `@DecimalMin(value = "0.01")` and `@Digits(integer = 15, fraction = 2)`; DB check constraints `CHECK (amount > 0.00)` in Flyway migration V2.
 - **Planned Verification Test:** Submit requests with `-10.00`, `0.00`, and `10.555`; assert HTTP 400 Bad Request with validation errors.
-- **Status:** **PLANNED** (Scheduled for Day 3 & Day 4)
+- **Status:** **VERIFIED** (Verified via `DepositWithdrawalControllerTest` — rejects negative amounts, zero amounts, and scale > 2 with RFC 7807 HTTP 400 Bad Request; and verified via MySQL integration tests).
 
 ---
 
 ### THREAT-10: Ledger Tampering (Direct Manipulation of Past Entries)
 - **Threat Description:** An internal rogue user or vulnerable endpoint attempts to modify or delete historical records in `ledger_entries` or `ledger_transactions`.
 - **Impact:** Critical. Loss of financial proof, audit trail corruption.
-- **Mitigation:** Immutable append-only design; no update/delete methods in repository; database user privileges restricted to revoke `UPDATE` and `DELETE` on ledger tables.
-- **Planned Verification Test:** Integration test verifying absence of delete/update repository endpoints; DB privilege test verifying `DELETE` denial.
-- **Status:** **PLANNED** (Scheduled for Day 4 & Day 5)
+- **Mitigation:** Immutable append-only design; no update/delete methods in repository; database user privileges restricted to revoke `UPDATE` and `DELETE` on ledger tables; continuous mathematical reconciliation ($\sum \text{debits} == \sum \text{credits}$).
+- **Planned Verification Test:** Integration test verifying absence of delete/update repository endpoints; DB privilege test verifying `DELETE` denial; reconciliation engine mathematical integrity checks.
+- **Status:** **VERIFIED** (Verified via `ReconciliationServiceTest` and `MySqlLedgerIntegrationTest` — mathematical reconciliation detects discrepancies, conservation is maintained, ledger entities have no mutation endpoints).
 
 ---
 
