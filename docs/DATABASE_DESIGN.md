@@ -1,6 +1,6 @@
 # LedgerLine — Relational Database Design Specification
-**Date:** 2026-11-08
-**Status:** Implemented & Verified Baseline (Day 3)
+**Date:** 2026-11-09
+**Status:** Implemented & Verified Baseline (Day 4)
 **Target Engine:** MySQL 8.0 (InnoDB Storage Engine)
 
 ---
@@ -249,20 +249,30 @@ The atomic double-entry postings. Each financial transaction creates balanced po
 ---
 
 ### 3.7 Table: `idempotency_records`
-Stores client idempotency keys, SHA-256 request fingerprints, execution status, and cached responses.
+Stores client idempotency keys, canonical SHA-256 request hashes, execution status, and serialized responses. Governed by database unique constraint `uk_idemp_user_op_key` on `(user_id, operation_type, idempotency_key)` to serialize concurrent requests and eliminate duplicate executions.
 
 | Column | Data Type | Modifiers | Description |
 | :--- | :--- | :--- | :--- |
 | `id` | `BIGINT` | `AUTO_INCREMENT`, `PRIMARY KEY` | Synthetic ID. |
-| `idempotency_key` | `VARCHAR(64)` | `NOT NULL`, `UNIQUE` | Client-provided key (UUIDv4). |
+| `idempotency_key` | `VARCHAR(64)` | `NOT NULL` | Client-provided key (max 64 chars). |
 | `user_id` | `BIGINT` | `NOT NULL`, `FK -> users(id)` | Initiating authenticated user. |
-| `request_path` | `VARCHAR(255)` | `NOT NULL` | HTTP API URI path. |
-| `request_fingerprint` | `CHAR(64)` | `NOT NULL` | SHA-256 hex digest of payload & user context. |
-| `status` | `VARCHAR(20)` | `NOT NULL` | `IN_PROGRESS`, `SUCCESS`, `FAILED`. |
-| `response_code` | `INT` | `NULL` | HTTP response status code. |
-| `response_payload` | `LONGTEXT` | `NULL` | Serialized JSON response to replay. |
+| `operation_type` | `VARCHAR(30)` | `NOT NULL`, `DEFAULT 'TRANSFER'` | Financial operation domain (`TRANSFER`). |
+| `request_path` | `VARCHAR(255)` | `NOT NULL` | HTTP API URI path (`/api/v1/transfers`). |
+| `request_hash` | `CHAR(64)` | `NOT NULL` | SHA-256 hex digest of normalized canonical payload. |
+| `transaction_reference` | `VARCHAR(64)` | `NULL` | Associated `ledger_transactions.transaction_reference`. |
+| `status` | `VARCHAR(20)` | `NOT NULL`, `DEFAULT 'COMPLETED'` | Record state: `COMPLETED`. |
+| `response_code` | `INT` | `NULL` | HTTP response status code (e.g., 201). |
+| `response_payload` | `LONGTEXT` | `NULL` | Serialized JSON response to replay without re-executing. |
 | `created_at` | `DATETIME(6)` | `NOT NULL`, `DEFAULT CURRENT_TIMESTAMP(6)` | Initial request arrival timestamp. |
-| `expires_at` | `DATETIME(6)` | `NOT NULL` | Key expiry timestamp (e.g. 24 hours). |
+| `updated_at` | `DATETIME(6)` | `NOT NULL`, `DEFAULT CURRENT_TIMESTAMP(6)` | Record update timestamp. |
+
+- **Constraints:**
+  - `uk_idemp_user_op_key`: `UNIQUE (user_id, operation_type, idempotency_key)`
+  - `fk_idemp_user`: `FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT`
+- **Indexes:**
+  - `idx_idemp_key` (`idempotency_key`)
+  - `idx_idemp_user_id` (`user_id`)
+  - `idx_idemp_created` (`created_at`)
 
 ---
 

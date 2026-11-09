@@ -136,6 +136,9 @@ class DepositWithdrawalServiceTest {
 
         assertEquals(0, totalDebits.compareTo(totalCredits), "Total debits must equal total credits");
         assertEquals(0, new BigDecimal("500.00").compareTo(totalDebits));
+
+        // Verify consistent audit event
+        verify(auditService).recordConsistentEvent(eq("DEPOSIT_COMPLETED"), eq(1L), eq(10L), any(), any());
     }
 
     @Test
@@ -201,6 +204,9 @@ class DepositWithdrawalServiceTest {
 
         assertEquals(0, totalDebits.compareTo(totalCredits));
         assertEquals(0, new BigDecimal("400.00").compareTo(totalDebits));
+
+        // Verify consistent audit event
+        verify(auditService).recordConsistentEvent(eq("WITHDRAWAL_COMPLETED"), eq(1L), eq(10L), any(), any());
     }
 
     @Test
@@ -218,8 +224,8 @@ class DepositWithdrawalServiceTest {
         assertEquals(new BigDecimal("1000.00"), ex.getAvailableBalance());
         assertEquals(new BigDecimal("1000.00"), customerAccount.getBalance(), "Balance must not change on failure");
 
-        // Verify audit event was recorded
-        verify(auditService).recordEvent(
+        // Verify autonomous refusal audit event was recorded
+        verify(auditService).recordAutonomousEvent(
                 eq("WITHDRAWAL_REFUSED_INSUFFICIENT_FUNDS"),
                 eq(1L),
                 eq(10L),

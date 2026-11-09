@@ -82,7 +82,8 @@ public class ReconciliationServiceImpl implements ReconciliationService {
             log.error("CRITICAL INTEGRITY DISCREPANCY on account id={} {}: materialized={}, computed={}, delta={}",
                     account.getId(), account.getAccountNumber(), materializedBalance, computedLedgerBalance, discrepancy);
 
-            auditService.recordEvent(
+            // Autonomous audit event: committed in independent transaction even from within readOnly query
+            auditService.recordAutonomousEvent(
                     "RECONCILIATION_DISCREPANCY",
                     currentUser.getId(),
                     account.getId(),

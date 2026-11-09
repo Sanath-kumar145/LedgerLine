@@ -1,6 +1,6 @@
 # LedgerLine — RESTful API Specification
-**Date:** 2026-11-08
-**Status:** Approved Implementation Baseline (Day 3 Complete)
+**Date:** 2026-11-09
+**Status:** Approved Implementation Baseline (Day 4 Complete)
 **Base URL:** `/api/v1`
 **Protocol:** HTTPS / JSON
 
@@ -18,9 +18,9 @@
 | **Account Statements** | `/api/v1/accounts/{id}/statement` | **IMPLEMENTED & VERIFIED** (Chronological Ledger Entries) | Day 3 |
 | **Account Reconciliation** | `/api/v1/accounts/{id}/reconciliation` | **IMPLEMENTED & VERIFIED** (Account Holder Integrity Check) | Day 3 |
 | **Auditor Operations** | `/api/v1/auditor` | **IMPLEMENTED & VERIFIED** (Account & System Conservation) | Day 3 |
-| **Transfers** | `/api/v1/transfers` | **PLANNED** | Day 4 |
+| **Transfers** | `/api/v1/transfers`, `/api/transfers` | **IMPLEMENTED & VERIFIED** (Deterministic Locking, Idempotency, 409 Conflict) | Day 4 |
 
-*Note: As of Day 3, core double-entry deposits, withdrawals, statements, and mathematical reconciliation engines are fully implemented and verified.*
+*Note: As of Day 4, internal transfers with database-enforced idempotency, deterministic deadlock prevention, and request fingerprinting are fully implemented and verified.*
 
 ---
 
@@ -259,22 +259,23 @@ All non-2xx responses conform to the standard RFC 7807 Problem Detail envelope:
 
 ### 5.3 Transfer Funds (Internal Double-Entry Transfer)
 - **Method:** `POST`
-- **URL:** `/api/v1/transfers`
+- **URL:** `/api/v1/transfers` (also available via alias `/api/transfers`)
 - **Purpose:** Atomically transfer funds from source account to destination account.
-- **Required Role:** `ROLE_USER` (Must own `sourceAccountId`)
+- **Required Role:** `ROLE_ACCOUNT_HOLDER` / `ROLE_USER` (Must own `sourceAccountId`)
 - **Request Headers:**
   - `Authorization: Bearer <token>`
-  - `Idempotency-Key: 9283fa71-551e-4509-a1b7-78da0b1e1948`
+  - `Idempotency-Key: 9283fa71-551e-4509-a1b7-78da0b1e1948` (Mandatory, max 64 chars)
 - **Request Body:**
   ```json
   {
     "sourceAccountId": 501,
     "destinationAccountId": 502,
     "amount": "350.00",
+    "currency": "INR",
     "description": "Rent share payment"
   }
   ```
-- **Response:** `201 Created`
+- **Response:** `201 Created` (Initial execution) / `200 OK` (Replayed duplicate)
   ```json
   {
     "transactionReference": "TX-XFER-3849102",
@@ -282,17 +283,25 @@ All non-2xx responses conform to the standard RFC 7807 Problem Detail envelope:
     "sourceAccountId": 501,
     "destinationAccountId": 502,
     "amount": "350.00",
-    "status": "COMPLETED",
-    "timestamp": "2026-11-06T15:45:00.000Z",
+    "currency": "INR",
+    "sourceBalanceAfter": "1200.50",
+    "destinationBalanceAfter": "850.00",
+    "status": "POSTED",
+    "description": "Rent share payment",
+    "idempotencyKey": "9283fa71-551e-4509-a1b7-78da0b1e1948",
+    "replayed": false,
+    "timestamp": "2026-11-09T15:45:00.000Z",
     "entries": [
       {
-        "accountId": 501,
+        "entryId": 901,
+        "transactionReference": "TX-XFER-3849102",
         "entryType": "DEBIT",
         "amount": "350.00",
         "balanceAfter": "1200.50"
       },
       {
-        "accountId": 502,
+        "entryId": 902,
+        "transactionReference": "TX-XFER-3849102",
         "entryType": "CREDIT",
         "amount": "350.00",
         "balanceAfter": "850.00"
@@ -301,10 +310,11 @@ All non-2xx responses conform to the standard RFC 7807 Problem Detail envelope:
   }
   ```
 - **Error Responses:**
-  - `400 Bad Request`: Same source and destination account ID.
-  - `403 Forbidden`: User does not own source account.
-  - `422 Unprocessable Entity`: Insufficient balance in source account.
-  - `409 Conflict`: Concurrent request with same idempotency key currently in progress.
+  - `400 Bad Request`: Same source and destination account ID, missing/blank `Idempotency-Key`, negative amount, scale > 2, clearing account transfer attempt.
+  - `403 Forbidden`: Caller does not own source account, or caller possesses `ROLE_AUDITOR`.
+  - `404 Not Found`: Source or destination account does not exist.
+  - `409 Conflict`: Idempotency key conflict (same key was previously used with a different request payload).
+  - `422 Unprocessable Entity`: Insufficient available balance in source account, or inactive account state.
 
 ---
 

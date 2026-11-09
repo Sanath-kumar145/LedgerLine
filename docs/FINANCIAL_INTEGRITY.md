@@ -1,6 +1,6 @@
 # LedgerLine — Financial Integrity & Concurrency Architecture
-**Date:** 2026-11-06
-**Status:** Approved Design Baseline (Day 1)
+**Date:** 2026-11-09
+**Status:** Implemented & Verified Baseline (Day 4 Complete)
 **System:** LedgerLine — Money Movement With a Ledger You Can Prove
 
 ---
@@ -49,24 +49,35 @@ flowchart TD
 - **Hibernate Session Cache Isolation:** The entity must not be loaded via an unlocked `findById()` prior to locking, as Hibernate's First-Level Session Cache would cache stale pre-lock balance fields. By acquiring `findByIdWithLock(accountId)` as the initial query in the transaction, Hibernate hydrates the entity directly from the newly locked, authoritatively committed database row.
 - In `ConcurrentWithdrawalTest`, two concurrent ₹400 withdrawals against a ₹500 balance run simultaneously. Thread 1 acquires the lock, checks balance, and deducts ₹400 (balance becomes ₹100). Thread 2 waits on the row lock; upon acquiring it, it reads the fresh balance (₹100), detects insufficient funds for ₹400, logs an audit event, and throws `InsufficientFundsException` (HTTP 422). Overdrafts are mathematically and physically impossible.
 
-### 2.4 Autonomous Audit Logging (REQUIRES_NEW)
-- When a financial transaction fails (e.g., insufficient funds during an attempted withdrawal), the primary financial transaction must roll back cleanly to ensure zero balance modification and zero partial ledger entries.
-- However, financial regulations mandate that refused transactions and security violations must be permanently logged in `audit_events`.
-- LedgerLine implements `AuditService.recordEvent()` with `@Transactional(propagation = Propagation.REQUIRES_NEW)`.
-- When invoked, the audit event is committed in an autonomous database transaction decoupled from the operational transaction. Even when the outer financial transaction rolls back, the audit record remains permanently persisted on disk.
-- To prevent self-deadlocks between the primary transaction and the autonomous audit transaction, `audit_events` is decoupled from foreign key constraints on mutable business tables.
+### 2.4 Dual Transaction Boundary Auditing (REQUIRED vs. REQUIRES_NEW)
+Financial auditing requires two fundamentally different transactional behaviors depending on the nature of the event:
 
-### 2.4 Idempotency Keys & Request Fingerprints
-- **Idempotency-Key Header:** Every non-idempotent HTTP request (`POST /api/v1/transfers`, `POST /api/v1/accounts/{id}/withdrawals`, etc.) must include an `Idempotency-Key` header with a client-generated UUIDv4.
-- **Request Fingerprinting:** To prevent malicious attackers or buggy clients from replaying an existing key with different parameters (e.g. key `abc` used for \$10, then reused for \$10,000), LedgerLine generates a SHA-256 fingerprint:
-  $$\text{Fingerprint} = \text{SHA256}(\text{UserId} + \text{HTTP Method} + \text{Path} + \text{Normalized JSON Payload})$$
-- **State Machine in `idempotency_records`:**
-  1. `IN_PROGRESS`: The request is currently being processed by an active thread. A duplicate incoming request with the same key returns `409 Conflict` (Operation in progress, retry shortly).
-  2. `SUCCESS`: The transaction completed. The stored response payload and status code (e.g. `201 Created`) are returned immediately without re-executing any business or ledger logic.
-  3. `FAILED`: The transaction was rejected (e.g., insufficient funds). The cached failure response is returned.
-- If a client supplies an existing `Idempotency-Key` whose stored fingerprint does not match the incoming request's fingerprint, the server rejects the call with `400 Bad Request (Idempotency key payload mismatch)`.
+1. **Transactionally Consistent Audit Events (`Propagation.REQUIRED` via `recordConsistentEvent`):**
+   - Completion events (`TRANSFER_COMPLETED`, `DEPOSIT_COMPLETED`, `WITHDRAWAL_COMPLETED`) represent the successful execution of a financial state mutation.
+   - If written in an autonomous `REQUIRES_NEW` transaction before the outer business transaction commits, an unexpected post-audit failure or rollback would leave a **false audit record** in `audit_events` asserting a transaction completed when in reality balances never moved and ledger entries were rolled back.
+   - Therefore, completion events must participate directly in the caller's database transaction (`Propagation.REQUIRED`). If the transaction rolls back for any reason, the completion audit event rolls back atomically alongside balance updates, ledger entries, and idempotency records.
 
-### 2.5 Defense-in-Depth Overdraft Prevention
+2. **Autonomous Refusal & Security Audit Events (`Propagation.REQUIRES_NEW` via `recordAutonomousEvent`):**
+   - When a transaction is refused (e.g., `TRANSFER_REFUSED_INSUFFICIENT_FUNDS`, `WITHDRAWAL_REFUSED_INSUFFICIENT_FUNDS`) or a discrepancy is flagged (`RECONCILIATION_DISCREPANCY`), the business transaction throws an exception or operates under a read-only context.
+   - Refused attempts and security events must **never roll back**; banking compliance and fraud detection mandate an immutable log of failed and unauthorized attempts.
+   - Therefore, refusal events execute with `Propagation.REQUIRES_NEW`. The active business transaction is temporarily suspended while the audit record is committed to MySQL in an independent transaction. When the subsequent domain exception triggers rollback of the financial mutation, the refusal record remains safely persisted on disk.
+   - To prevent self-deadlocks between the primary transaction and the autonomous audit transaction, `audit_events` is decoupled from foreign key constraints on mutable business tables.
+
+### 2.5 Database-Enforced Idempotency & Request Fingerprinting
+- **Idempotency-Key Header:** Every non-idempotent financial request (`POST /api/v1/transfers`, `POST /api/transfers`) requires an `Idempotency-Key` header with a client-supplied identifier (max 64 chars). Missing or blank headers are rejected with HTTP 400 Bad Request.
+- **Canonical SHA-256 Request Fingerprinting:** To prevent payload tampering or accidental key reuse with different parameters, LedgerLine computes a deterministic SHA-256 hash:
+  $$\text{Request Hash} = \text{SHA256}(\text{sourceAccountId} + "|" + \text{destinationAccountId} + "|" + \text{normalizedAmount} + "|" + \text{currency} + "|" + \text{description})$$
+- **Database Unique Constraint Serialization:**
+  - Persisted in `idempotency_records` governed by `CONSTRAINT uk_idemp_user_op_key UNIQUE (user_id, operation_type, idempotency_key)`.
+  - Application-level locks are insufficient under multi-threaded concurrency; the database unique index acts as the authoritative serializer.
+  - When two concurrent requests arrive with the same key, the database unique constraint permits exactly one transaction to commit. The competing transaction catches `DataIntegrityViolationException`, rolls back cleanly, and queries the winning committed record.
+- **Behavior Matrix:**
+  1. **New Key (Case A):** Executes transfer atomically, stores response payload and hash, commits.
+  2. **Exact Duplicate (Case B & D):** If request hash matches the stored hash, returns the cached response with `replayed: true` (HTTP 200 OK) without executing another transfer or modifying account balances.
+  3. **Conflicting Payload (Case C & Test 4):** If the incoming request has a different amount, source, or destination, throws `IdempotencyConflictException` mapping to HTTP 409 Conflict.
+  4. **Failed Transfer Rollback:** If a transfer fails (e.g., insufficient funds), the transaction rolls back cleanly, ensuring no permanent or misleading idempotency record remains. Future retries with corrected funds can proceed.
+
+### 2.6 Defense-in-Depth Overdraft Prevention
 Even if an application thread suffered an unexpected bug, an account can never become overdrawn due to three distinct defense barriers:
 1. **Application Pre-Lock Validation:** DTO checks ensure `amount > 0`.
 2. **Pessimistic In-Transaction Check:** `if (sourceAccount.getBalance().compareTo(amount) < 0) throw new InsufficientFundsException()`.

@@ -207,3 +207,122 @@ All investigations, compilation fixes, security enhancements, and test suite exe
    - `ConcurrentWithdrawalTest`: Successfully verified that two concurrent ₹400 withdrawals against an initial ₹500 balance result in exactly 1 success, 1 failure (HTTP 422), a strictly maintained ₹100.00 balance, exactly 2 customer ledger entries, an autonomous audit record, and verified mathematical reconciliation.
    - Frontend production build (`npm run build --prefix frontend`): Succeeded cleanly with exit code 0.
    - `git diff --check`: 0 whitespace errors; zero staged/committed files.
+
+---
+
+## 8. Day 4: Internal Transfers, Idempotency & Concurrency Safety
+
+### 8.1 User Prompt (Summary)
+> **DAY 4 — INTERNAL TRANSFERS, IDEMPOTENCY & CONCURRENCY SAFETY**
+> Project: LedgerLine — Money Movement With a Ledger You Can Prove
+> 1. Initial verification of current project (Git branch `main`, latest commit `4d1dbfd`).
+> 2. Implement internal account-to-account transfers with atomic double-entry ledger postings ($\sum \text{debits} == \sum \text{credits}$).
+> 3. Implement database-enforced idempotency keys (`Idempotency-Key` header):
+>    - Case A: First request executes once and persists key and result.
+>    - Case B: Exact duplicate request returns original stored result (`replayed = true`).
+>    - Case C: Same key with different payload rejected with HTTP 409 Conflict.
+>    - Case D: Concurrent duplicate requests execute exactly once and resolve to same original transfer result.
+>    - Case E: Different keys execute as separate operations.
+> 4. Deterministic account locking order ($\min(\text{src}, \text{dst})$ then $\max(\text{src}, \text{dst})$) to eliminate circular-wait deadlocks.
+> 5. Concurrency-safe balance validation under exclusive lock (Fresh Read Principle).
+> 6. Account-level authorization: caller must own source account; destination account can belong to another customer; auditors cannot initiate transfers; system clearing accounts rejected.
+> 7. Automated testing against real MySQL 8.0 Testcontainers:
+>    - Transfer service tests (12 cases).
+>    - Idempotency tests (7 cases).
+>    - Concurrency tests (Test 1: concurrent overspending; Test 2: opposite-direction transfers deadlock test; Test 3: concurrent duplicate key; Test 4: same key conflicting payload).
+>    - Regression tests across all Day 1–3 suites.
+> 8. Truthful documentation updates across all project architecture docs. Do not stage, commit, or push.
+
+### 8.2 Implementation & Engineering Summary
+1. **Flyway Migration (`V3__init_idempotency_schema.sql`)**:
+   - Created `idempotency_records` table with unique constraint `uk_idemp_user_op_key` on `(user_id, operation_type, idempotency_key)`, canonical request hash, status, response code, and serialized response payload.
+2. **Deterministic Account Locking Order ($\min / \max$)**:
+   - Implemented in `TransferServiceImpl.executeTransferInternal()`:
+     ```java
+     Long firstLockId = Math.min(srcId, dstId);
+     Long secondLockId = Math.max(srcId, dstId);
+     Account first = accountRepository.findByIdWithLock(firstLockId);
+     Account second = accountRepository.findByIdWithLock(secondLockId);
+     ```
+   - Eliminates circular-wait deadlocks in opposite-direction transfers ($A \rightarrow B$ and $B \rightarrow A$).
+3. **Database-Enforced Idempotency & Conflict Detection**:
+   - Normalized request canonical string: `src|dst|amount|currency|desc` hashed via SHA-256.
+   - Fast-path lookup returns cached response (`replayed: true`, HTTP 200 OK) if hash matches.
+   - Rejects payload tampering with `IdempotencyConflictException` (HTTP 409 Conflict).
+   - Serializes concurrent duplicate requests via database unique constraint; losing threads catch `DataIntegrityViolationException`, roll back cleanly, and retrieve the winner's committed result.
+   - Failed transfers (e.g. overdrafts) roll back cleanly, preventing permanent tombstones.
+4. **Endpoints & Controller**:
+   - `TransferController` mapped to `/api/v1/transfers` and alias `/api/transfers`.
+   - Rejects missing or blank `Idempotency-Key` header with HTTP 400 Bad Request.
+   - Returns HTTP 201 Created for new operations, HTTP 200 OK for replayed duplicates.
+5. **Encountered Issues & Corrections**:
+   - *Issue 1:* `UnnecessaryStubbingException` in `TransferServiceTest` when validation failed before transaction creation.
+     *Fix:* Marked transaction manager stubbing with `lenient().when(...)`.
+   - *Issue 2:* Missing import for `Optional` in `ConcurrentTransferTest`.
+     *Fix:* Added `import java.util.Optional;`.
+   - *Issue 3:* Formal parameter count mismatch calling `reconcileSystem()` in `MySqlTransferIntegrationTest`.
+     *Fix:* Created and passed `auditorPrincipal` to `reconcileSystem(auditorPrincipal)`.
+6. **Automated Verification Against Real MySQL 8.0 Testcontainers**:
+   - **94 total tests executed: 94 passed, 0 failed, 0 errors, 0 skipped.**
+   - `ConcurrentTransferTest`:
+     - Test 1 (Overspending): 2 concurrent ₹400 transfers on ₹500 balance $\rightarrow$ 1 succeeds, 1 fails with 422, final balance strictly ₹100.00.
+     - Test 2 (Opposite-direction): Concurrent $A \rightarrow B$ and $B \rightarrow A$ transfers complete without deadlocking.
+     - Test 3 (Concurrent duplicate key): 3 concurrent threads with same key move money exactly once, all 3 receive same transaction reference.
+     - Test 4 (Conflicting payload): 2 concurrent threads with same key but different amounts $\rightarrow$ exactly 1 accepted, 1 rejected with 409 Conflict.
+   - Frontend production build (`npm run build --prefix frontend`): Succeeded cleanly with exit code 0 (built in 510ms).
+   - `git diff --check`: 0 whitespace errors; zero staged/committed files.
+
+
+---
+
+## 9. Day 4 Critical Audit Transaction Boundary Correction Prompt
+
+### 9.1 User Prompt
+> Review the existing LedgerLine Day 4 implementation.
+>
+> File: `backend/ledgerline-api/src/main/java/com/ledgerline/service/TransferServiceImpl.java`
+>
+> Problem identified:
+> The successful transfer path calls:
+> `auditService.recordEvent("TRANSFER_COMPLETED", ...)`
+> before the outer transfer transaction commits.
+> The existing AuditService uses REQUIRES_NEW transaction propagation. Therefore, the success audit event can commit independently even if the actual transfer transaction subsequently rolls back.
+> This can produce a false financial audit record.
+>
+> Required correction:
+> 1. Inspect AuditService and AuditServiceImpl.
+> 2. Inspect how Day 3 deposit and withdrawal operations handle audit events.
+> 3. For successful transfers, ensure the completion audit event is transactionally consistent with the transfer.
+> 4. Prefer writing the successful audit event inside the same database transaction, so it commits or rolls back with:
+>    - Source balance update.
+>    - Destination balance update.
+>    - Ledger transaction.
+>    - Debit and credit entries.
+>    - Idempotency record.
+> 5. Autonomous audit events (like security violations or refusal attempts) should still be handled safely.
+> 6. Verify rollback behavior with tests (including forced rollback and insufficient funds refusal).
+> 7. Do not stage, commit, or push. Run full tests.
+
+### 9.2 Engineering Diagnosis & Architectural Correction
+1. **Diagnosis:**
+   - In `TransferServiceImpl.java`, `auditService.recordEvent("TRANSFER_COMPLETED", ...)` was executed prior to outer transaction commit. Because `AuditServiceImpl.recordEvent` was annotated with `@Transactional(propagation = Propagation.REQUIRES_NEW)`, it opened an autonomous transaction that committed immediately to MySQL.
+   - If the main business transaction encountered a catastrophic error, constraint failure, or post-audit exception, the financial state (balances, ledger entries, idempotency record) rolled back, but the `TRANSFER_COMPLETED` audit event remained committed in the database, creating an invalid non-existent financial transaction record in audit logs.
+   - Furthermore, Day 3 deposit and withdrawal operations in `TransactionServiceImpl` suffered from the identical vulnerability (`DEPOSIT_COMPLETED`, `WITHDRAWAL_COMPLETED`).
+
+2. **Dual Transaction Boundary Architecture:**
+   - **Consistent Audit Events (`Propagation.REQUIRED` via `recordConsistentEvent`):**
+     Completion events (`TRANSFER_COMPLETED`, `DEPOSIT_COMPLETED`, `WITHDRAWAL_COMPLETED`) join the caller's active transaction. If any failure triggers a rollback, the completion audit event rolls back atomically, ensuring no false audit logs can ever exist.
+   - **Autonomous Audit Events (`Propagation.REQUIRES_NEW` via `recordAutonomousEvent`):**
+     Refusal records (`TRANSFER_REFUSED_INSUFFICIENT_FUNDS`, `WITHDRAWAL_REFUSED_INSUFFICIENT_FUNDS`) and discrepancy alerts (`RECONCILIATION_DISCREPANCY`) execute in an autonomous transaction. When an exception (`InsufficientFundsException`) triggers rollback of the financial mutation, the refusal audit record remains permanently persisted on disk for regulatory compliance and fraud detection.
+   - **Default Method (`recordEvent`):** Delegates to `recordConsistentEvent` (`Propagation.REQUIRED`) to prevent accidental autonomous leakage.
+
+3. **Verification & Testing Results:**
+   - Added unit test suite `AuditServiceTest` (3 tests) verifying both propagation behaviors.
+   - Enhanced `MySqlTransferIntegrationTest` against real MySQL 8.0 via Testcontainers:
+     - `testEndToEndTransfer_mysqlVerification`: Confirms `TRANSFER_COMPLETED` audit event commits along with balances, ledger entries, and idempotency records.
+     - `testTransferRollback_clearsConsistentAuditEventAndBalancesAndEntries`: Forced rollback after writing `recordConsistentEvent("TRANSFER_COMPLETED", ...)` proves that outside the transaction, balances are untouched, ledger entries are absent, and **NO `TRANSFER_COMPLETED` audit event exists in MySQL**, while `recordAutonomousEvent` in the same scope survived rollback.
+     - `testTransferRefused_insufficientFunds_preservesRefusalAuditEventInMySql`: Proves that insufficient funds refusal keeps balances untouched, prevents completion audit write, but **permanently preserves `TRANSFER_REFUSED_INSUFFICIENT_FUNDS` in MySQL**.
+   - **Test Suite Results:**
+     - **99 tests run: 99 passed, 0 failures, 0 errors, 0 skipped.**
+     - Frontend production build: exit code 0 (`SUCCESS`).
+     - `git diff --check`: 0 whitespace errors; zero staged/committed files.

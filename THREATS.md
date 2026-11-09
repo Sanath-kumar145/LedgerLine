@@ -1,6 +1,6 @@
 # LedgerLine — Threat Model & Security Register
-**Date:** 2026-11-08
-**Status:** Implementation Security Register (Day 3 Complete)
+**Date:** 2026-11-09
+**Status:** Implementation Security Register (Day 4 Complete)
 **System:** LedgerLine — Money Movement With a Ledger You Can Prove
 
 ---
@@ -58,9 +58,9 @@ This register enumerates security threats, financial risks, and failure modes ev
 ### THREAT-05: Unauthorized Money Transfer (Transfers From Accounts Not Owned by User)
 - **Threat Description:** User A submits a transfer request with `sourceAccountId` belonging to User B.
 - **Impact:** Critical. Direct theft of customer funds.
-- **Mitigation:** `TransferService` enforces strict source account ownership validation inside the transactional boundary before lock acquisition.
-- **Planned Verification Test:** Integration test where User A attempts transfer from User B's account; assert HTTP 403 Forbidden and verify zero balance deduction.
-- **Status:** **PLANNED** (Scheduled for Day 4)
+- **Mitigation:** `TransferService` enforces strict source account ownership validation inside the transactional boundary before lock acquisition (`sourceAccount.isOwnedBy(currentUser.getId())`); auditors explicitly barred from initiating transfers.
+- **Planned Verification Test:** Integration and unit tests where User A attempts transfer from User B's account; assert HTTP 403 Forbidden and verify zero balance deduction.
+- **Status:** **VERIFIED** (Verified via `TransferServiceTest.testRejectUnauthorizedSourceAccount` and `TransferServiceTest.testRejectAuditorInitiation` — cross-user transfers and auditor initiations rejected with HTTP 403 Forbidden and logged).
 
 ---
 
@@ -69,25 +69,25 @@ This register enumerates security threats, financial risks, and failure modes ev
 - **Impact:** Critical. Illegal negative balances, financial insolvency.
 - **Mitigation:** Pessimistic write locking (`SELECT ... FOR UPDATE`); fresh balance re-validation under lock (Fresh Read Principle); database check constraint `CHECK (balance >= 0.00)`.
 - **Planned Verification Test:** Concurrency test using `ExecutorService` and `CountDownLatch` with concurrent threads attempting to withdraw funds exceeding balance; assert exactly one succeeds and the other fails with insufficient funds.
-- **Status:** **VERIFIED** (Verified via `ConcurrentWithdrawalTest` against MySQL Testcontainers — two concurrent ₹400 withdrawals against ₹500 balance executed simultaneously; exactly 1 succeeded, 1 failed with HTTP 422 `InsufficientFundsException`, final balance strictly ₹100.00, customer entries count exactly 2, audit event logged with `REQUIRES_NEW`, reconciliation status `BALANCED`).
+- **Status:** **VERIFIED** (Verified via `ConcurrentWithdrawalTest` and `ConcurrentTransferTest.testConcurrentOverspending` against MySQL Testcontainers — two concurrent ₹400 transfers against ₹500 balance executed simultaneously; exactly 1 succeeded, 1 failed with HTTP 422 `InsufficientFundsException`, final balance strictly ₹100.00, customer entries count exactly 2, audit event logged with `REQUIRES_NEW`, reconciliation status `BALANCED`).
 
 ---
 
 ### THREAT-07: Idempotency Key Replay & Network Retries
 - **Threat Description:** Network drop causes client to retry transfer; server executes the transfer twice, deducting funds twice.
 - **Impact:** Critical. Duplicate deductions and customer balance loss.
-- **Mitigation:** Mandatory `Idempotency-Key` header with database persistence in `idempotency_records`; return cached response on key replay.
+- **Mitigation:** Mandatory `Idempotency-Key` header with database persistence in `idempotency_records` (`UNIQUE (user_id, operation_type, idempotency_key)`); return cached response with `replayed: true` on key replay.
 - **Planned Verification Test:** Issue 3 identical transfer requests with identical `Idempotency-Key`; assert only 1 financial transaction is created, and all 3 requests return the same transaction reference.
-- **Status:** **PLANNED** (Scheduled for Day 4)
+- **Status:** **VERIFIED** (Verified via `TransferIdempotencyTest.testExactDuplicateRequestReturnsStoredResult`, `MySqlTransferIntegrationTest`, and `ConcurrentTransferTest.testConcurrentDuplicateKey` — 3 concurrent threads with same key move money exactly once, all resolve to same transaction reference).
 
 ---
 
 ### THREAT-08: Request Payload Manipulation & Key Reuse
-- **Threat Description:** An attacker reuses an existing valid `Idempotency-Key` but alters the transfer amount from \$10 to \$1,000.
+- **Threat Description:** An attacker reuses an existing valid `Idempotency-Key` but alters the transfer amount from $10 to $1,000.
 - **Impact:** High. Fraudulent transaction execution or state bypass.
-- **Mitigation:** SHA-256 request fingerprinting combining user ID, HTTP path, and serialized body. If key matches but fingerprint differs, return HTTP 400 Bad Request.
-- **Planned Verification Test:** Submit request with key `K` for \$10; then submit with key `K` for \$20; assert HTTP 400 with `PAYLOAD_FINGERPRINT_MISMATCH`.
-- **Status:** **PLANNED** (Scheduled for Day 4)
+- **Mitigation:** SHA-256 canonical request fingerprinting combining source, destination, normalized amount, currency, and description. If key matches but hash differs, return HTTP 409 Conflict.
+- **Planned Verification Test:** Submit request with key `K` for $10; then submit with key `K` for $20; assert HTTP 409 with `IdempotencyConflictException`.
+- **Status:** **VERIFIED** (Verified via `TransferIdempotencyTest.testSameKeyDifferentAmountThrowsConflict`, `MySqlTransferIntegrationTest`, and `ConcurrentTransferTest.testSameKeyConflictingPayload` — altered amount, source, or destination rejected with HTTP 409 Conflict).
 
 ---
 

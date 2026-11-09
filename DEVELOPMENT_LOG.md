@@ -254,3 +254,90 @@ Implement genuine double-entry money movement, clearing counterparty accounts, d
 2. Implement deterministic dual-account pessimistic locking order ($\min(\text{src}, \text{dst})$ then $\max(\text{src}, \text{dst})$) to eliminate transfer deadlocks.
 3. Implement `Idempotency-Key` interceptor/filter with SHA-256 payload fingerprinting and persistent `idempotency_records` table.
 4. Add concurrent transfer and deadlock stress testing.
+
+---
+
+## 2026-11-09 — Day 4: Internal Transfers, Idempotency & Concurrency Safety
+
+### 1. Scope & Objectives
+Implement secure internal account-to-account transfers, atomic double-entry ledger postings, database-enforced idempotency keys, canonical request fingerprinting, payload conflict detection (HTTP 409), deterministic account lock ordering ($\min(\text{src}, \text{dst})$ then $\max(\text{src}, \text{dst})$) for deadlock immunity, account-level authorization, and comprehensive automated test suites against real MySQL 8.0 via Testcontainers.
+
+---
+
+### 2. Implementation Deliverables
+
+1. **Flyway Migration `V3__init_idempotency_schema.sql`**:
+   - `idempotency_records`: Stores `idempotency_key`, `user_id`, `operation_type`, `request_path`, `request_hash` (SHA-256 canonical digest), `transaction_reference`, `status` (`COMPLETED`), `response_code`, and `response_payload` (serialized JSON).
+   - Unique Constraint: `CONSTRAINT uk_idemp_user_op_key UNIQUE (user_id, operation_type, idempotency_key)` to serialize concurrent duplicate requests at the database storage engine layer.
+   - Indexes: `idx_idemp_key`, `idx_idemp_user_id`, `idx_idemp_created`.
+
+2. **Domain Persistence & DTOs**:
+   - Entity: `IdempotencyRecord` with JPA mapping and lifecycle timestamps.
+   - Repository: `IdempotencyRecordRepository` with composite lookup methods.
+   - DTOs: `TransferRequest` (with validation for accounts, strictly positive amount, max 2 decimals) and `TransferResponse` (with `sourceBalanceAfter`, `destinationBalanceAfter`, `replayed`, and double-entry postings).
+   - Exception: `IdempotencyConflictException` mapping to HTTP 409 Conflict via `GlobalExceptionHandler`.
+
+3. **Core Transfer Engine (`TransferServiceImpl`)**:
+   - **Deterministic Locking Order:** Computes `min(srcId, dstId)` and `max(srcId, dstId)`, executing `accountRepository.findByIdWithLock(...)` in strictly ascending order. This guarantees that opposite-direction transfers ($A \rightarrow B$ and $B \rightarrow A$) acquire locks in identical sequence, mathematically preventing deadlocks.
+   - **Fresh Read Principle:** Row locks are acquired as the initial queries inside the transaction boundary, bypassing stale Hibernate L1 session cache entities.
+   - **Account Authorization & Integrity:** Verifies caller owns source account (`sourceAccount.isOwnedBy(currentUser.getId())`), rejects auditor transfer attempts (`ROLE_AUDITOR`), rejects transfers to/from `SYSTEM_CLEARING` accounts, verifies active states, and validates currency matches.
+   - **Overdraft Defense:** Authoritative in-transaction balance check under exclusive lock. Refuses overdraft attempts with RFC 7807 HTTP 422 `InsufficientFundsException` and records `TRANSFER_REFUSED_INSUFFICIENT_FUNDS` via autonomous `REQUIRES_NEW` audit logging.
+   - **Balanced Double-Entry Journaling:** Posts 1 `DEBIT` entry against source account and 1 `CREDIT` entry against destination account. Conserves total money ($\sum \text{debits} == \sum \text{credits}$).
+   - **Database-Enforced Idempotency:**
+     - Computes canonical SHA-256 hash: `sourceAccountId|destinationAccountId|amount|currency|description`.
+     - Fast-path checks before and after lock acquisition.
+     - Exact retries return cached response with `replayed = true` (HTTP 200 OK) without re-executing business logic or moving funds.
+     - Conflicting payloads with same key throw `IdempotencyConflictException` (HTTP 409 Conflict).
+     - Concurrent competing requests serialize via unique constraint; the losing thread catches `DataIntegrityViolationException`, rolls back cleanly, and queries the winning committed record.
+     - Failed transfers (e.g. insufficient funds) roll back cleanly, leaving zero unusable idempotency records.
+
+4. **REST Controller (`TransferController`)**:
+   - Endpoints: `POST /api/v1/transfers` and alias `POST /api/transfers`.
+   - Headers: Mandatory `Idempotency-Key` (max 64 chars). Missing key returns HTTP 400 Bad Request.
+   - Returns HTTP 201 Created for new operations, HTTP 200 OK for replayed operations.
+
+---
+
+### 3. Test & Verification Results
+
+1. **Automated Test Suite (Real MySQL 8.0 Testcontainers)**:
+   - **Total Tests Run:** 99
+   - **Passed:** 99
+   - **Failures:** 0
+   - **Errors:** 0
+   - **Skipped:** 0
+   - **New Day 4 Test Classes:**
+     - `TransferServiceTest`: 12 passed (transfer math, balance deduction/increase, zero/negative amounts, self-transfers, insufficient funds, inactive accounts, currency mismatch, unauthorized source, clearing account attempts, auditor attempts).
+     - `TransferIdempotencyTest`: 7 passed (first request execution, exact retry, altered amount/source/destination conflict detection, separate keys, failed transfer rollback).
+     - `TransferControllerTest`: 9 passed (201 Created, 200 OK replay, 400 validation, 400 missing header, 422 insufficient funds, 409 conflict, alias route).
+     - `MySqlTransferIntegrationTest`: 3 passed (Flyway V3 migration, live transfer balance updates, double entry, idempotency record, statement debit/credit, live reconciliation `SYSTEM_BALANCED`, forced rollback clears consistent audit events, insufficient funds preserves autonomous refusal audit event).
+     - `ConcurrentTransferTest`: 4 passed (multi-threaded race condition tests with `CountDownLatch` against MySQL Testcontainers):
+       - Test 1: Concurrent overspending (₹500 balance, two ₹400 transfers $\rightarrow$ exactly 1 succeeds, 1 fails with 422, final balance strictly ₹100.00).
+       - Test 2: Opposite-direction transfers ($A \rightarrow B$ and $B \rightarrow A$ concurrently $\rightarrow$ zero deadlocks, balances update accurately).
+       - Test 3: Concurrent duplicate keys (3 threads with same key $\rightarrow$ exactly 1 transfer executed, all 3 receive same transaction reference, 1 debit + 1 credit in ledger).
+       - Test 4: Conflicting payload detection (concurrent same key with different amounts $\rightarrow$ exactly 1 accepted, 1 rejected with 409 Conflict).
+     - `AuditServiceTest`: 3 passed (verified `recordConsistentEvent` with `REQUIRED`, `recordAutonomousEvent` with `REQUIRES_NEW`, and default `recordEvent`).
+     - Day 1–3 Regression: All 61 existing tests passed cleanly without any regressions.
+
+2. **Critical Audit Transaction Boundary Correction**:
+   - **Issue:** `TransferServiceImpl` called `auditService.recordEvent("TRANSFER_COMPLETED", ...)` before outer transaction commit. Because `AuditServiceImpl.recordEvent` used `REQUIRES_NEW`, success audit records committed independently. Any subsequent transaction rollback produced a false financial record.
+   - **Correction:** Implemented Dual Transaction Boundary Pattern:
+     - `recordConsistentEvent` (`Propagation.REQUIRED`): used for `TRANSFER_COMPLETED`, `DEPOSIT_COMPLETED`, and `WITHDRAWAL_COMPLETED`. Commits or rolls back atomically with balance updates, ledger entries, and idempotency records.
+     - `recordAutonomousEvent` (`Propagation.REQUIRES_NEW`): used for `TRANSFER_REFUSED_INSUFFICIENT_FUNDS`, `WITHDRAWAL_REFUSED_INSUFFICIENT_FUNDS`, and `RECONCILIATION_DISCREPANCY`. Commits immediately in an autonomous transaction so that refusal and discrepancy audit trails persist even when the financial mutation rolls back or runs in read-only mode.
+   - **Verification:** Integration tests against real MySQL 8.0 confirmed that forced rollback after audit write leaves zero balance changes, zero ledger entries, zero idempotency records, and zero `TRANSFER_COMPLETED` audit events, while autonomous refusal records are preserved.
+
+3. **Frontend Production Build**:
+   - Command: `npm run build --prefix frontend`
+   - Status: `SUCCESS` (exit code 0, built in 297ms).
+
+4. **Code Quality & Git Hygiene**:
+   - `git diff --check`: 0 whitespace errors.
+   - Root `package.json` and `package-lock.json` untouched.
+   - 0 files staged, 0 commits pushed.
+
+---
+
+### 4. Next Day's Objectives (Day 5)
+1. Implement enhanced statement query filtering (date ranges, pagination, transaction type filtering).
+2. Expand continuous reconciliation automation and regulatory compliance reporting.
+3. Prepare backend services for frontend integration.

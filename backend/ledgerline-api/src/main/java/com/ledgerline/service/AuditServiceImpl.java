@@ -16,9 +16,20 @@ public class AuditServiceImpl implements AuditService {
     }
 
     @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public AuditEvent recordEvent(String eventType, Long userId, Long accountId, String details, String ipAddress) {
+    @Transactional(propagation = Propagation.REQUIRED)
+    public AuditEvent recordConsistentEvent(String eventType, Long userId, Long accountId, String details, String ipAddress) {
         return auditEventRepository.save(new AuditEvent(eventType, userId, accountId, details, ipAddress));
     }
-}
 
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public AuditEvent recordAutonomousEvent(String eventType, Long userId, Long accountId, String details, String ipAddress) {
+        return auditEventRepository.save(new AuditEvent(eventType, userId, accountId, details, ipAddress));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRED)
+    public AuditEvent recordEvent(String eventType, Long userId, Long accountId, String details, String ipAddress) {
+        return recordConsistentEvent(eventType, userId, accountId, details, ipAddress);
+    }
+}

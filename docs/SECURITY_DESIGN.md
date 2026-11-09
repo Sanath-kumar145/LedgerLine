@@ -1,6 +1,6 @@
 # LedgerLine — Security Architecture & Design Specification
-**Date:** 2026-11-08
-**Status:** Implementation Baseline (Day 3 Complete)
+**Date:** 2026-11-09
+**Status:** Implementation Baseline (Day 4 Complete)
 **System:** LedgerLine — Money Movement With a Ledger You Can Prove
 
 ---
@@ -78,6 +78,12 @@ graph TD
   }
   ```
 
+### 3.3 Transfer Authorization & Separation of Duties
+- **Source Account Ownership:** In `TransferServiceImpl.transfer()`, the system strictly validates that `sourceAccount.isOwnedBy(currentUser.getId())`. An account holder cannot initiate transfers or debit funds from accounts owned by other users.
+- **Auditor Restriction:** Users possessing `ROLE_AUDITOR` are strictly forbidden from initiating financial transfers (`AccessDeniedException`). Auditor permissions are exclusively read-only for compliance, inspection, and mathematical reconciliation.
+- **Clearing Account Immunity:** Customers cannot transfer funds to or from system clearing accounts (`SYSTEM_CLEARING`).
+- **Privacy Preservation:** Cross-account transfer failures (e.g. invalid destination state) never disclose private balances, identities, or details of other users' accounts.
+
 ---
 
 ## 4. Input Validation & Data Sanitization
@@ -115,10 +121,17 @@ graph TD
   - `created_at`
   - Diagnostic metadata snapshot.
 
-### 6.1 Autonomous Transaction Propagation (`REQUIRES_NEW`)
-- Audit events for refused operations (e.g., `INSUFFICIENT_FUNDS`) must persist even when the outer financial transaction fails or throws an exception resulting in rollback.
-- `AuditServiceImpl.recordEvent(...)` executes with `@Transactional(propagation = Propagation.REQUIRES_NEW)`.
-- **Database Lock Decoupling:** In MySQL InnoDB, foreign key constraints enforce shared (`S`) locks on referenced parent rows (`accounts`). If an outer transaction holds an exclusive row lock (`X` lock via `SELECT ... FOR UPDATE`) on an account, an autonomous inner transaction attempting to insert an `audit_event` with a foreign key back to `accounts` would block waiting for the outer lock to release, causing lock wait timeouts or self-deadlocks. Consequently, `audit_events` references entity IDs (`account_id`, `user_id`) as indexed numeric fields without relational FK constraints.
+### 6.1 Dual Transaction Boundary Architecture (`REQUIRED` vs `REQUIRES_NEW`)
+To prevent false audit entries while ensuring immutable security violation and refusal records:
+
+1. **Transactionally Consistent Completion Events (`recordConsistentEvent` — `Propagation.REQUIRED`):**
+   - Events recording the completion of state mutations (`TRANSFER_COMPLETED`, `DEPOSIT_COMPLETED`, `WITHDRAWAL_COMPLETED`) participate in the active transaction boundary.
+   - If an unexpected error, constraint violation, or rollback occurs, the completion audit event rolls back atomically with the balance updates, ledger entries, and idempotency records, guaranteeing that no false success audit logs ever exist.
+
+2. **Autonomous Refusal & Security Events (`recordAutonomousEvent` — `Propagation.REQUIRES_NEW`):**
+   - Audit events for refused operations (e.g., `TRANSFER_REFUSED_INSUFFICIENT_FUNDS`, `WITHDRAWAL_REFUSED_INSUFFICIENT_FUNDS`, `RECONCILIATION_DISCREPANCY`) execute in an autonomous transaction (`REQUIRES_NEW`).
+   - The outer transaction is temporarily suspended while the refusal log is committed. Even when the outer financial transaction subsequently rolls back due to `InsufficientFundsException`, the refusal record remains permanently persisted.
+   - **Database Lock Decoupling:** In MySQL InnoDB, foreign key constraints enforce shared (`S`) locks on referenced parent rows (`accounts`). If an outer transaction holds an exclusive row lock (`X` lock via `SELECT ... FOR UPDATE`) on an account, an autonomous inner transaction attempting to insert an `audit_event` with a foreign key back to `accounts` would block waiting for the outer lock to release, causing lock wait timeouts or self-deadlocks. Consequently, `audit_events` references entity IDs (`account_id`, `user_id`) as indexed numeric fields without relational FK constraints.
 
 ---
 
@@ -130,7 +143,21 @@ graph TD
 
 ### 7.2 Fresh Read Principle & Session Cache Isolation
 - Hibernate maintains an L1 (session) entity cache. If an entity is read using an unlocked query prior to locking, Hibernate caches that entity. Subsequent calls to lock the entity may return the cached representation without querying MySQL again.
-- **Enforcement:** `TransactionServiceImpl` mandates that `findByIdWithLock(accountId)` is the **first query executed** within the `@Transactional` boundary, ensuring the latest committed row state and balance are loaded directly from the database under lock.
+- **Enforcement:** `TransactionServiceImpl` and `TransferServiceImpl` mandate that `findByIdWithLock(accountId)` is the **first query executed** within the transaction boundary, ensuring the latest committed row state and balance are loaded directly from the database under lock.
+
+### 7.3 Deterministic Lock Ordering ($\min / \max$) & Deadlock Immunity
+- In bidirectional transfers between accounts (e.g. Thread 1: Account 10 -> Account 20; Thread 2: Account 20 -> Account 10), opposite lock acquisition orders induce circular wait deadlocks.
+- `TransferServiceImpl` computes `firstLockId = Math.min(srcId, dstId)` and `secondLockId = Math.max(srcId, dstId)`.
+- Locks are always acquired in ascending account ID order:
+  1. `accountRepository.findByIdWithLock(firstLockId)`
+  2. `accountRepository.findByIdWithLock(secondLockId)`
+- Because all threads request row locks in the identical natural order, circular wait deadlocks are mathematically eliminated. Verified under concurrent stress in `ConcurrentTransferTest.testOppositeDirectionTransfers`.
+
+### 7.4 Database-Enforced Idempotency & Conflict Detection
+- Mutating transfer operations require an `Idempotency-Key` HTTP header.
+- Enforced via unique constraint `uk_idemp_user_op_key` on `(user_id, operation_type, idempotency_key)` in `idempotency_records`.
+- Normalized payloads are hashed with SHA-256. Replays with identical payloads return cached responses with `replayed: true` (HTTP 200). Altered payloads on the same key are rejected with HTTP 409 Conflict.
+- Failed operations (e.g. overdrafts) roll back cleanly, preventing unusable idempotency tombstones.
 
 ---
 

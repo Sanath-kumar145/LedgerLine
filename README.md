@@ -1,7 +1,7 @@
 # LedgerLine — Money Movement With a Ledger You Can Prove
 
 > **Snovasys Hackathon Project**
-> **Status:** Day 3 Completed (Double-Entry Ledger Architecture, Deposits, Withdrawals, Pessimistic Row Locking, Concurrency Defense, Mathematical Reconciliation Engine, Real MySQL 8.0 Integration with Testcontainers)
+> **Status:** Day 4 Completed (Internal Transfers, Atomic Double-Entry Postings, Deterministic Account Locking Order, Database-Enforced Idempotency, Request Conflict Detection, Concurrency Safety & Deadlock Immunity, 94 Passing Tests Against Real MySQL 8.0 via Testcontainers)
 > **Repository:** [https://github.com/Sanath-kumar145/LedgerLine.git](https://github.com/Sanath-kumar145/LedgerLine.git)
 
 ---
@@ -97,42 +97,40 @@ LedgerLine/
 
 ---
 
-## 4. Current State (End of Day 3)
+## 4. Current State (End of Day 4)
 
-As of **Day 3**, the repository has implemented and verified the full financial core for double-entry bookkeeping, deposits, withdrawals, concurrency defense, and continuous reconciliation:
+As of **Day 4**, the repository has implemented and verified internal account-to-account transfers, atomic double-entry postings, database-enforced idempotency, and concurrency safety:
 - **Flyway Database Migrations:**
   - `V1__init_auth_schema.sql`: Core tables for `roles`, `users`, `user_roles`, and `accounts` with `CHECK (account_type = 'SYSTEM_CLEARING' OR balance >= 0.00)`.
   - `V2__init_ledger_schema.sql`: Double-entry core tables for `ledger_transactions`, `ledger_entries`, `audit_events`, auxiliary indexes, and seed clearing accounts (`SYS_CLEARING_INR`, `SYS_CLEARING_USD`).
+  - `V3__init_idempotency_schema.sql`: Idempotency engine persistence table `idempotency_records` with unique constraint `(user_id, operation_type, idempotency_key)`, canonical request hash, and cached response payloads.
 - **Domain Persistence Layer:**
-  - Enums: `TransactionType` (DEPOSIT, WITHDRAWAL, TRANSFER, ADJUSTMENT), `TransactionStatus` (PENDING, POSTED, FAILED, REJECTED), `EntryType` (DEBIT, CREDIT).
-  - Entities: `LedgerTransaction` (journal header with UUID reference, initiator user tracking), `LedgerEntry` (atomic immutable postings), `AuditEvent` (security & refused attempt logging).
-  - Repositories: `LedgerTransactionRepository`, `LedgerEntryRepository`, `AuditEventRepository`, `AccountRepository` with pessimistic write locks (`findByIdWithLock`, `findByAccountNumberWithLock`, `findByAccountTypeAndCurrencyWithLock`).
-- **Financial Architecture & Invariants:**
-  - **Double-Entry Principle:** Every transaction generates at least two balanced entries ($\sum \text{Debits} == \sum \text{Credits}$).
-  - **Clearing Invariant:** External deposits debit `SYS_CLEARING_INR` and credit the customer account; external withdrawals debit the customer account and credit `SYS_CLEARING_INR`. Net system money is strictly conserved.
-  - **Pessimistic Row Locking (`SELECT ... FOR UPDATE`):** The customer account row is locked exclusively at the start of the transaction. Fresh balance verification occurs under lock to prevent race conditions and double-spending.
-  - **Autonomous Audit Logging (`Propagation.REQUIRES_NEW`):** Refused operations (e.g. `WITHDRAWAL_REFUSED_INSUFFICIENT_FUNDS`) are logged in an autonomous transaction, persisting even when the financial transaction rolls back.
-- **Mathematical Reconciliation Engine:**
-  - `ReconciliationService`: Verifies account balance against sum of entries ($\Delta = \text{materialized} - (\sum \text{credits} - \sum \text{debits}) == 0.00$) and system-wide conservation ($\sum \text{all debits} == \sum \text{all credits}$, 0 unbalanced transactions).
+  - Entities: `LedgerTransaction`, `LedgerEntry`, `AuditEvent`, `IdempotencyRecord`.
+  - Repositories: `AccountRepository` with pessimistic write locks (`findByIdWithLock`, `findByAccountNumberWithLock`, `findByAccountTypeAndCurrencyWithLock`), `LedgerTransactionRepository`, `LedgerEntryRepository`, `AuditEventRepository`, `IdempotencyRecordRepository`.
+- **Financial Architecture & Concurrency Guarantees:**
+  - **Internal Account-to-Account Transfers:** Atomic transfer operation within a single database transaction. Debits source customer account and credits destination customer account with balanced double entries ($\sum \text{Debits} == \sum \text{Credits}$).
+  - **Deterministic Account Lock Ordering ($\min / \max$):** Accounts are always locked in ascending natural ID order ($\min(\text{src}, \text{dst})$ then $\max(\text{src}, \text{dst})$) via `SELECT ... FOR UPDATE`, mathematically eliminating circular-wait deadlocks during bidirectional concurrent transfers.
+  - **Fresh Read Principle:** Account locks are acquired as the first queries inside the transaction boundary, bypassing stale Hibernate L1 session caches.
+  - **Database-Enforced Idempotency:** Client `Idempotency-Key` headers are verified against canonical SHA-256 request fingerprints. Exact retries return cached responses without moving money twice (`replayed: true`), while altered payloads on the same key are rejected with HTTP 409 Conflict.
+  - **Autonomous Audit Logging (`Propagation.REQUIRES_NEW`):** Refused operations (e.g. `TRANSFER_REFUSED_INSUFFICIENT_FUNDS`) persist independently in `audit_events` even when the financial transaction rolls back.
 - **REST Endpoints Implemented:**
-  - `POST /api/v1/auth/register` (user registration)
-  - `POST /api/v1/auth/login` (stateless JWT issue)
-  - `POST /api/v1/auth/logout` (stateless client confirmation)
-  - `GET /api/v1/users/me` (profile retrieval)
-  - `GET /api/v1/admin/users` (ROLE_ADMIN user directory)
-  - `GET /api/v1/accounts` (user accounts list)
-  - `GET /api/v1/accounts/{id}` (account details with IDOR check)
+  - `POST /api/v1/transfers` & `POST /api/transfers` (internal double-entry transfer with `Idempotency-Key` header)
   - `POST /api/v1/accounts/{id}/deposits` (authenticated deposit, double-entry clearing)
   - `POST /api/v1/accounts/{id}/withdrawals` (authenticated withdrawal, pessimistic lock, overdraft check)
   - `GET /api/v1/accounts/{id}/statement` (chronological statement of entries)
   - `GET /api/v1/accounts/{id}/reconciliation` (account-level math proof)
   - `GET /api/v1/auditor/reconcile/{accountId}` (ROLE_AUDITOR / ROLE_ADMIN account check)
   - `GET /api/v1/auditor/system-reconciliation` (ROLE_AUDITOR / ROLE_ADMIN system proof)
+  - `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `GET /api/v1/users/me`, `GET /api/v1/admin/users`, `GET /api/v1/accounts`
 - **Automated Verification:**
-  - **61 automated tests executed and passing cleanly (0 failures, 0 errors, 0 skipped).**
-  - **100% genuine MySQL 8.0 testing via Testcontainers** (Docker Engine 29.3.1 / Testcontainers 1.21.4).
-  - Multi-threaded concurrent withdrawal stress test (`ConcurrentWithdrawalTest`) successfully proved race condition immunity and overdraft prevention using `CountDownLatch`.
-  - Frontend production build (`npm run build`) verifies cleanly.
+  - **94 automated tests executed and passing cleanly (0 failures, 0 errors, 0 skipped).**
+  - **100% genuine MySQL 8.0 testing via Testcontainers** (Docker Engine 29.9.2 / Testcontainers 1.21.4).
+  - Multi-threaded concurrency tests (`ConcurrentTransferTest` & `ConcurrentWithdrawalTest`):
+    - Concurrent overspending prevention (₹500 balance, two ₹400 transfers $\rightarrow$ exactly 1 succeeds, 1 fails with HTTP 422).
+    - Opposite-direction transfers ($A \rightarrow B$ and $B \rightarrow A$ concurrently $\rightarrow$ zero deadlocks).
+    - Concurrent duplicate keys (multiple concurrent threads with same key $\rightarrow$ exactly 1 transfer executed, all threads resolve to same result).
+    - Conflicting payload detection (concurrent same key with different amounts $\rightarrow$ exactly 1 accepted, 1 rejected with 409 Conflict).
+  - Frontend production build (`npm run build`) verified cleanly in 510ms.
 
 ---
 
@@ -212,8 +210,8 @@ This isolates local developer convenience defaults (`application-dev.properties`
 | **Day 1** | **Audit, Architecture & Design** | Repository audit, system architecture, database schema, concurrency design, threat model, API specifications, and baseline builds. | **COMPLETED** |
 | **Day 2** | **Authentication, RBAC & Ownership** | User/Role entities, BCrypt work factor 12, stateless JWT, RBAC guards, account ownership IDOR defense, RFC 7807 handler, and Testcontainers setup. | **COMPLETED** |
 | **Day 3** | **Account Management & Funding** | Foundation Flyway migrations for ledger tables, double-entry clearing accounts, deposit clearing, and withdrawal clearing with balance checks. | **COMPLETED** |
-| **Day 4** | **Double-Entry Financial Core** | TransferService, deterministic row locking ($\min/\max$), double-entry postings, idempotency engine, and race-condition prevention. | *Next* |
-| **Day 5** | **Statements & Reconciliation** | Immutable statement queries, audit event capture for refused transactions, and auditor mathematical reconciliation engine. | Planned |
+| **Day 4** | **Double-Entry Financial Core** | TransferService, deterministic row locking ($\min/\max$), double-entry postings, idempotency engine, and race-condition prevention. | **COMPLETED** |
+| **Day 5** | **Statements & Reconciliation** | Immutable statement queries, audit event capture for refused transactions, and auditor mathematical reconciliation engine. | *Next* |
 | **Day 6** | **Frontend Application** | React 19 UI, authentication flows, dashboard, transfer interface with proof badges, statement view, and auditor console. | Planned |
 | **Day 7** | **Integration & Concurrency Testing** | Multi-threaded race condition tests (CountDownLatch), stress testing, edge-case hardening, and final delivery polish. | Planned |
 

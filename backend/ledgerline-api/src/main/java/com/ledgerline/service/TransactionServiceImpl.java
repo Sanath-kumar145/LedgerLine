@@ -112,8 +112,8 @@ public class TransactionServiceImpl implements TransactionService {
 
         LedgerTransaction savedTx = transactionRepository.save(transaction);
 
-        // 6. Record audit event
-        auditService.recordEvent(
+        // 6. Record audit event (Consistent: participates in caller transaction, rolls back on failure)
+        auditService.recordConsistentEvent(
                 "DEPOSIT_COMPLETED",
                 currentUser.getId(),
                 lockedCustomerAccount.getId(),
@@ -163,7 +163,8 @@ public class TransactionServiceImpl implements TransactionService {
             log.warn("Withdrawal refused for account {}: requested={}, available={}",
                     lockedCustomerAccount.getAccountNumber(), amount, lockedCustomerAccount.getBalance());
 
-            auditService.recordEvent(
+            // Autonomous audit event: committed in independent transaction so refusal record persists on rollback
+            auditService.recordAutonomousEvent(
                     "WITHDRAWAL_REFUSED_INSUFFICIENT_FUNDS",
                     currentUser.getId(),
                     lockedCustomerAccount.getId(),
@@ -210,8 +211,8 @@ public class TransactionServiceImpl implements TransactionService {
 
         LedgerTransaction savedTx = transactionRepository.save(transaction);
 
-        // 7. Record audit event
-        auditService.recordEvent(
+        // 7. Record audit event (Consistent: participates in caller transaction, rolls back on failure)
+        auditService.recordConsistentEvent(
                 "WITHDRAWAL_COMPLETED",
                 currentUser.getId(),
                 lockedCustomerAccount.getId(),
