@@ -19,6 +19,7 @@
 | **Account Reconciliation** | `/api/v1/accounts/{id}/reconciliation` | **IMPLEMENTED & VERIFIED** (Account Holder Integrity Check) | Day 3 |
 | **Auditor Operations** | `/api/v1/auditor` | **IMPLEMENTED & VERIFIED** (Account & System Conservation) | Day 3 |
 | **Transfers** | `/api/v1/transfers`, `/api/transfers` | **IMPLEMENTED & VERIFIED** (Deterministic Locking, Idempotency, 409 Conflict) | Day 4 |
+| **Health Check** | `/health`, `/api/v1/health` | **IMPLEMENTED & VERIFIED** (Service status & version check) | MVP |
 
 *Note: As of Day 4, internal transfers with database-enforced idempotency, deterministic deadlock prevention, and request fingerprinting are fully implemented and verified.*
 

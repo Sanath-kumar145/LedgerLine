@@ -10,6 +10,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreRemove;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -86,6 +87,11 @@ public class LedgerTransaction {
         if (this.transactionReference == null) {
             this.transactionReference = "TX-" + UUID.randomUUID().toString();
         }
+    }
+
+    @PreRemove
+    protected void onPreRemove() {
+        throw new UnsupportedOperationException("Ledger transactions are immutable and cannot be deleted.");
     }
 
     public void addEntry(LedgerEntry entry) {

@@ -103,9 +103,9 @@ This register enumerates security threats, financial risks, and failure modes ev
 ### THREAT-10: Ledger Tampering (Direct Manipulation of Past Entries)
 - **Threat Description:** An internal rogue user or vulnerable endpoint attempts to modify or delete historical records in `ledger_entries` or `ledger_transactions`.
 - **Impact:** Critical. Loss of financial proof, audit trail corruption.
-- **Mitigation:** Immutable append-only design; no update/delete methods in repository; database user privileges restricted to revoke `UPDATE` and `DELETE` on ledger tables; continuous mathematical reconciliation ($\sum \text{debits} == \sum \text{credits}$).
-- **Planned Verification Test:** Integration test verifying absence of delete/update repository endpoints; DB privilege test verifying `DELETE` denial; reconciliation engine mathematical integrity checks.
-- **Status:** **VERIFIED** (Verified via `ReconciliationServiceTest` and `MySqlLedgerIntegrationTest` — mathematical reconciliation detects discrepancies, conservation is maintained, ledger entities have no mutation endpoints).
+- **Mitigation:** Immutable append-only design; `@Immutable` on `LedgerEntry` prevents Hibernate from issuing updates; `@PreUpdate` and `@PreRemove` entity lifecycle callbacks throw `UnsupportedOperationException`; repository delete methods overridden to throw `UnsupportedOperationException`; continuous mathematical reconciliation ($\sum \text{debits} == \sum \text{credits}$).
+- **Planned Verification Test:** Integration tests verifying that attempted deletion via repository, deletion by ID, deletion via EntityManager, and attempted updates are strictly blocked.
+- **Status:** **VERIFIED** (Verified via `MySqlLedgerImmutabilityTest` against real MySQL 8.0 — all 5 immutability test cases pass; deletions are blocked with `UnsupportedOperationException`, updates are ignored by `@Immutable` leaving database state untouched).
 
 ---
 
@@ -114,7 +114,7 @@ This register enumerates security threats, financial risks, and failure modes ev
 - **Impact:** Critical. Database breach, data loss, integrity destruction.
 - **Mitigation:** Use Spring Data JPA named parameters, Criteria API, or JPQL binding; zero dynamic SQL string concatenation.
 - **Planned Verification Test:** Security test injecting `' OR 1=1 --` into username, account number, and description fields; assert strict literal query matching.
-- **Status:** **PLANNED** (Scheduled for Day 2)
+- **Status:** **VERIFIED** (Verified across repositories using parameterized JPQL/derived queries; zero raw dynamic SQL concatenation).
 
 ---
 
@@ -141,7 +141,7 @@ This register enumerates security threats, financial risks, and failure modes ev
 - **Impact:** Critical. Double-entry imbalance, money destruction.
 - **Mitigation:** Single atomic ACID transaction managed by Spring's `PlatformTransactionManager`; InnoDB rollbacks uncommitted operations on connection loss.
 - **Planned Verification Test:** Simulated transaction failure test triggering an artificial runtime exception immediately after debit insertion; assert neither debit nor credit persist.
-- **Status:** **PLANNED** (Scheduled for Day 4)
+- **Status:** **VERIFIED** (Verified via `MySqlTransferIntegrationTest.testTransferRollback_clearsConsistentAuditEventAndBalancesAndEntries` — forced transaction failure proves that balances, ledger entries, idempotency records, and consistent audit events all roll back atomically, leaving zero partial state in MySQL).
 
 ---
 

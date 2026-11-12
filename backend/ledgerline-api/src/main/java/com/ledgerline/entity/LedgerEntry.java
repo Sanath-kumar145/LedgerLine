@@ -11,13 +11,17 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreRemove;
+import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.Immutable;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Objects;
 
 @Entity
 @Table(name = "ledger_entries")
+@Immutable
 public class LedgerEntry {
 
     @Id
@@ -60,6 +64,16 @@ public class LedgerEntry {
         if (this.postedAt == null) {
             this.postedAt = Instant.now();
         }
+    }
+
+    @PreUpdate
+    protected void onPreUpdate() {
+        throw new UnsupportedOperationException("Ledger entries are immutable and cannot be updated.");
+    }
+
+    @PreRemove
+    protected void onPreRemove() {
+        throw new UnsupportedOperationException("Ledger entries are immutable and cannot be deleted.");
     }
 
     public Long getId() {

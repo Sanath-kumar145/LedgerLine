@@ -341,3 +341,79 @@ Implement secure internal account-to-account transfers, atomic double-entry ledg
 1. Implement enhanced statement query filtering (date ranges, pagination, transaction type filtering).
 2. Expand continuous reconciliation automation and regulatory compliance reporting.
 3. Prepare backend services for frontend integration.
+
+
+---
+
+## 2026-11-12 — Final-Day Hackathon Completion: Production-Ready MVP
+
+### 1. Scope & Objectives
+Complete the LedgerLine hackathon MVP prior to the 4:00 PM submission deadline:
+- Audit and verify baseline backend and frontend health.
+- Implement defense-in-depth append-only ledger immutability enforcement (`@Immutable`, `@PreUpdate`/`@PreRemove` lifecycle callbacks, repository delete overrides).
+- Create automated integration tests proving that attempted modification and deletion of ledger entries and transactions are strictly rejected (`MySqlLedgerImmutabilityTest`).
+- Build a complete, responsive React 19 + TypeScript banking dashboard in `frontend/src/` with real REST API integration (Login/Register, Account Balances, Deposits, Withdrawals, Internal Transfers with Idempotency Replay & Conflict testing, Chronological Statements, Live Account Reconciliation, and Auditor System-Wide Proof).
+- Add `/health` and `/api/v1/health` endpoints and configurable CORS for production environments.
+- Create multi-stage backend `Dockerfile`, Render blueprint `render.yaml`, and Netlify configuration `netlify.toml`.
+- Execute full automated test suite (105 tests passing) and frontend production build.
+
+---
+
+### 2. Implementation Deliverables
+
+1. **Append-Only Ledger Immutability Protection**:
+   - `LedgerEntry`: Marked with Hibernate `@Immutable`, added `@PreUpdate` and `@PreRemove` callbacks throwing `UnsupportedOperationException`.
+   - `LedgerTransaction`: Added `@PreRemove` callback throwing `UnsupportedOperationException`.
+   - `LedgerEntryRepository`: Overrode all delete methods (`delete`, `deleteById`, `deleteAll`, `deleteAllById`) to throw `UnsupportedOperationException`.
+   - `LedgerTransactionRepository`: Overrode all delete methods (`delete`, `deleteById`, `deleteAll`) to throw `UnsupportedOperationException`.
+   - `MySqlLedgerImmutabilityTest`: 5 automated tests verifying:
+     - Deletion via repository throws `UnsupportedOperationException`.
+     - Deletion by ID throws `UnsupportedOperationException`.
+     - Transaction deletion throws `UnsupportedOperationException`.
+     - Removal via `EntityManager` throws `UnsupportedOperationException`.
+     - Attempted update via JPA is ignored by Hibernate `@Immutable`, preserving database values.
+
+2. **React 19 + TypeScript Banking Dashboard (`frontend/src/`)**:
+   - `types.ts`: Complete TypeScript interfaces matching backend REST schemas.
+   - `api.ts`: API service with automatic JWT token storage, Bearer header attachment, automatic UUID `Idempotency-Key` generation, and RFC 7807 error handling.
+   - `App.tsx`: Full single-page dashboard featuring:
+     - Unauthenticated View: Sign In & Register tabs with quick-fill demo credentials.
+     - Header: User profile, role badges (`ACCOUNT_HOLDER`, `AUDITOR`, `ADMIN`), server health pill.
+     - Account Cards: Live balance, account numbers, account type, status.
+     - Action Forms:
+       - Internal Transfer: Deterministic row locking, idempotency replay demo, 409 conflict demo.
+       - External Deposit: Double-entry clearing counterparty (`SYS_CLEARING_INR`).
+       - External Withdrawal: Pessimistic lock balance check with overdraft error display.
+       - Account Statement: Chronological journal entries with Debit/Credit badges.
+       - Live Math Audit: Real-time calculation proving `Balance == Σ Credits - Σ Debits`.
+       - Auditor System Console: System-wide conservation of money inspection ($\sum \text{Debits} == \sum \text{Credits}$).
+
+3. **Cloud Deployment Configuration**:
+   - Multi-stage production `Dockerfile` in `backend/ledgerline-api/Dockerfile`.
+   - Render Blueprint `render.yaml` configuring web service and managed MySQL.
+   - Netlify configuration `netlify.toml` for frontend SPA routing.
+   - Health check endpoints `/health` and `/api/v1/health`.
+   - Configurable CORS via `CORS_ALLOWED_ORIGINS`.
+
+---
+
+### 3. Test & Verification Results
+
+1. **Backend Automated Tests (Testcontainers MySQL 8.0)**:
+   - **Total Tests Run:** 105
+   - **Passed:** 105
+   - **Failures:** 0
+   - **Errors:** 0
+   - **Skipped:** 0
+   - **Execution Time:** ~1 minute 20 seconds
+   - **Test Classes:** 22 test classes spanning controllers, repositories, services, security, idempotency, and concurrency.
+
+2. **Frontend Production Build**:
+   - Command: `npm run build --prefix frontend`
+   - Exit Code: 0 (`SUCCESS`, built in 403ms).
+   - Zero TypeScript errors, zero lint warnings.
+
+3. **Git Cleanliness**:
+   - `git diff --check`: 0 whitespace errors.
+   - Root `package.json` and `package-lock.json` untouched.
+   - 0 files staged, 0 commits pushed.

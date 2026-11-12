@@ -20,5 +20,29 @@ public interface LedgerTransactionRepository extends JpaRepository<LedgerTransac
            "HAVING SUM(CASE WHEN e.entryType = com.ledgerline.entity.EntryType.DEBIT THEN e.amount ELSE 0 END) != " +
            "SUM(CASE WHEN e.entryType = com.ledgerline.entity.EntryType.CREDIT THEN e.amount ELSE 0 END)")
     List<Long> findUnbalancedTransactionIdsByStatus(@Param("status") TransactionStatus status);
-}
 
+    @Override
+    default void delete(LedgerTransaction entity) {
+        throw new UnsupportedOperationException("LedgerLine Integrity Violation: Ledger transactions are immutable and cannot be deleted.");
+    }
+
+    @Override
+    default void deleteById(Long id) {
+        throw new UnsupportedOperationException("LedgerLine Integrity Violation: Ledger transactions are immutable and cannot be deleted.");
+    }
+
+    @Override
+    default void deleteAll() {
+        throw new UnsupportedOperationException("LedgerLine Integrity Violation: Ledger transactions are immutable and cannot be deleted.");
+    }
+
+    @Override
+    default void deleteAll(Iterable<? extends LedgerTransaction> entities) {
+        throw new UnsupportedOperationException("LedgerLine Integrity Violation: Ledger transactions are immutable and cannot be deleted.");
+    }
+
+    @Override
+    default void deleteAllById(Iterable<? extends Long> ids) {
+        throw new UnsupportedOperationException("LedgerLine Integrity Violation: Ledger transactions are immutable and cannot be deleted.");
+    }
+}

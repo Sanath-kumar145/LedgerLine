@@ -111,25 +111,27 @@ Even if an application thread suffered an unexpected bug, an account can never b
 
 ### Threat 1: Duplicate Transfers (Network Retries & Double Clicks)
 - **Scenario:** A user clicks "Transfer \$500" twice in rapid succession, or an intermittent network timeout causes an automated client retry after the server already processed the transfer.
-- **Prevention:** The client generates a unique `Idempotency-Key` before initiating the call. The server's `IdempotencyInterceptor` looks up the key in `idempotency_records` using unique constraints. If the record exists and status is `SUCCESS`, the server replays the original `201 Created` response. No secondary debit or credit is executed.
+- **Prevention:**The client generates a unique `Idempotency-Key` before initiating the call. The server's `IdempotencyInterceptor` looks up the key in `idempotency_records` using unique constraints. If the record exists and status is `SUCCESS`, the server replays the original `201 Created` response. No secondary debit or credit is executed.
 
 ### Threat 2: Concurrent Overdrafts (Race Conditions)
 - **Scenario:** An account has a balance of \$100.00. Two concurrent requests arrive simultaneously, each requesting a \$100.00 withdrawal or transfer.
-- **Prevention:** Both requests attempt to lock the account. Request 1 acquires the `SELECT ... FOR UPDATE` row lock. Request 2 is blocked and enters a wait queue. Request 1 reads balance (\$100.00), verifies funds, deducts \$100.00 (balance becomes \$0.00), posts ledger entries, and commits. Now Request 2 is granted the lock. Request 2 reads the refreshed balance directly from the locked row, observes \$0.00, rejects the transfer, and emits an `INSUFFICIENT_FUNDS` audit event. Even if application locking failed, the DB check constraint `CHECK (balance >= 0.00)` aborts the write.
+- **Prevention:**Both requests attempt to lock the account. Request 1 acquires the `SELECT ... FOR UPDATE` row lock. Request 2 is blocked and enters a wait queue. Request 1 reads balance (\$100.00), verifies funds, deducts \$100.00 (balance becomes \$0.00), posts ledger entries, and commits. Now Request 2 is granted the lock. Request 2 reads the refreshed balance directly from the locked row, observes \$0.00, rejects the transfer, and emits an `INSUFFICIENT_FUNDS` audit event. Even if application locking failed, the DB check constraint `CHECK (balance >= 0.00)` aborts the write.
 
 ### Threat 3: Partial Debit and Credit Writes
 - **Scenario:** The server debits Account A, but crashes or encounters a network partition before crediting Account B.
-- **Prevention:** Both debit and credit postings, along with account balance mutations, are executed inside a single ACID `@Transactional` boundary. In relational database transactions, either all writes commit together, or the transaction manager rolls back all writes upon failure. No intermediate single-sided state can ever be made visible to other queries or committed to disk.
+- **Prevention:**Both debit and credit postings, along with account balance mutations, are executed inside a single ACID `@Transactional` boundary. In relational database transactions, either all writes commit together, or the transaction manager rolls back all writes upon failure. No intermediate single-sided state can ever be made visible to other queries or committed to disk.
 
 ### Threat 4: Unauthorized Transfers (Broken Object Level Authorization / IDOR)
 - **Scenario:** User A crafts an API request specifying User B's account ID as the source of a transfer.
-- **Prevention:** Before acquiring locks or modifying state, the `TransferService` inspects the authenticated user principal from the `SecurityContext`. It executes an ownership verification query:
+- **Prevention:**Before acquiring locks or modifying state, the `TransferService` inspects the authenticated user principal from the `SecurityContext`. It executes an ownership verification query:
   `accountRepository.findByIdAndUserId(sourceAccountId, authenticatedUserId)`
   If the account does not belong to the caller (and the caller does not hold `ROLE_ADMIN`), the request is immediately rejected with `403 Forbidden` and logged in `audit_events` as an unauthorized transfer attempt.
 
 ### Threat 5: Ledger Modification Through Normal Application APIs
 - **Scenario:** A malicious insider or compromised API endpoint attempts to mutate past ledger entries to conceal embezzlement.
-- **Prevention:** The Spring Data JPA `LedgerEntryRepository` and `LedgerTransactionRepository` expose only `save()` for inserts and read-only query methods (`findById`, `findByAccountId`). No `delete()`, `deleteById()`, or update queries exist in the codebase. Furthermore, at the database user permission level, the operational DB user account is granted `SELECT`, `INSERT`, `UPDATE` (on accounts only), while `DELETE` and `UPDATE` on `ledger_entries` and `ledger_transactions` are revoked.
+- **Prevention:**
+  - **Application-Layer Immutability (Enforced & Verified):** Spring Data JPA `LedgerEntryRepository` and `LedgerTransactionRepository` override all deletion methods (`delete`, `deleteById`, `deleteAll`) to throw `UnsupportedOperationException`. `@PreUpdate` and `@PreRemove` entity lifecycle listeners intercept and reject entity modifications, and Hibernate `@Immutable` suppresses SQL `UPDATE` generation during dirty checking.
+  - **Database-Enforced Immutability (Operational Hardening):** At the database layer for production deployments, database administrators should configure the operational DB user account with `SELECT`, `INSERT`, and `UPDATE` on mutable tables (such as `accounts` balances), while strictly withholding or revoking `UPDATE` and `DELETE` on `ledger_entries` and `ledger_transactions`. Flyway migrations run under standard application permissions and do not configure database-level triggers to avoid requiring elevated MySQL `SUPER` privileges when binary logging is enabled.
 
 ---
 

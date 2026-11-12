@@ -1,0 +1,29 @@
+services:
+  # Backend Spring Boot API
+  - type: web
+    name: ledgerline-api
+    runtime: docker
+    dockerfilePath: ./backend/ledgerline-api/Dockerfile
+    dockerContext: ./backend/ledgerline-api
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+      # Hosted MySQL Database Credentials (Externalized — Enter via Render Dashboard)
+      # NOTE: Render managed databases only support PostgreSQL.
+      # Use an external hosted MySQL 8.0 provider (e.g. Aiven, Railway, TiDB Cloud)
+      # with TLS enabled (sslMode=REQUIRED).
+      - key: DB_URL
+        sync: false
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ALLOWED_ORIGINS
+        value: "https://ledgerline.netlify.app,http://localhost:5173"

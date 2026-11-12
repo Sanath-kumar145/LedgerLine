@@ -29,5 +29,29 @@ public interface LedgerEntryRepository extends JpaRepository<LedgerEntry, Long> 
     BigDecimal sumTotalAmountByEntryTypeAndStatus(
             @Param("entryType") EntryType entryType,
             @Param("status") TransactionStatus status);
-}
 
+    @Override
+    default void delete(LedgerEntry entity) {
+        throw new UnsupportedOperationException("LedgerLine Integrity Violation: Ledger entries are immutable and cannot be deleted.");
+    }
+
+    @Override
+    default void deleteById(Long id) {
+        throw new UnsupportedOperationException("LedgerLine Integrity Violation: Ledger entries are immutable and cannot be deleted.");
+    }
+
+    @Override
+    default void deleteAll() {
+        throw new UnsupportedOperationException("LedgerLine Integrity Violation: Ledger entries are immutable and cannot be deleted.");
+    }
+
+    @Override
+    default void deleteAll(Iterable<? extends LedgerEntry> entities) {
+        throw new UnsupportedOperationException("LedgerLine Integrity Violation: Ledger entries are immutable and cannot be deleted.");
+    }
+
+    @Override
+    default void deleteAllById(Iterable<? extends Long> ids) {
+        throw new UnsupportedOperationException("LedgerLine Integrity Violation: Ledger entries are immutable and cannot be deleted.");
+    }
+}
